@@ -1,5 +1,7 @@
 # MiMo Token Plan API 参考文档
 
+[English version](api-reference.en.md)
+
 本文档详细说明 MiMo Token Plan API 的接口规范，包括 ASR 语音转写和 LLM 文本生成的请求/响应格式、参数说明和错误处理。
 
 ## API 基础配置

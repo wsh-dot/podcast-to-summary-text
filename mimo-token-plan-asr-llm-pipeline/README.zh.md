@@ -137,3 +137,4 @@ python scripts/mimo_podcast_tool.py --self-test
 - [providers.md](references/providers.md)：ASR 和 LLM provider 边界。
 - [timeline-report-format.md](references/timeline-report-format.md)：时间线报告格式。
 - [api-reference.md](references/api-reference.md)：MiMo Token Plan API 参考。
+- [api-reference.en.md](references/api-reference.en.md)：MiMo Token Plan API 英文参考。
