@@ -68,6 +68,28 @@ Summary modes:
 
 ## Installation
 
+### Quick Install In AI IDEs
+
+If CodeBuddy, Qoder Work, Codex, or another AI coding IDE supports installing a skill from GitHub, paste this **skill subdirectory URL**:
+
+```text
+https://github.com/wsh-dot/podcast-to-summary-text/tree/main/mimo-token-plan-asr-llm-pipeline
+```
+
+You can also send this prompt to your AI IDE:
+
+```text
+Install the skill from this GitHub subdirectory:
+https://github.com/wsh-dot/podcast-to-summary-text/tree/main/mimo-token-plan-asr-llm-pipeline
+
+Install only the mimo-token-plan-asr-llm-pipeline/ directory. The installed skill root must directly contain SKILL.md, scripts/, and references/.
+Do not copy the repository root README.md, README.en.md, or README.zh.md files into the installed skill folder.
+```
+
+Do not rely on the repository root URL `https://github.com/wsh-dot/podcast-to-summary-text` as an automatic install URL. The repository root is documentation only, while the actual skill is in a subdirectory. Strict installers that only look for `SKILL.md` at the repository root may fail.
+
+If your AI IDE cannot install from a GitHub subdirectory, use the manual steps below.
+
 Clone this repository:
 
 ```bash

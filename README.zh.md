@@ -68,6 +68,28 @@ Agent 在任务开始时应该一个问题一个问题地询问：
 
 ## 安装方式
 
+### AI IDE 快速安装
+
+如果 CodeBuddy、Qoder Work、Codex 或其它 AI 编程软件支持从 GitHub 安装 skill，优先粘贴这个 **skill 子目录链接**：
+
+```text
+https://github.com/wsh-dot/podcast-to-summary-text/tree/main/mimo-token-plan-asr-llm-pipeline
+```
+
+也可以直接把下面这段话发给你的 AI IDE：
+
+```text
+请从这个 GitHub 子目录安装 skill：
+https://github.com/wsh-dot/podcast-to-summary-text/tree/main/mimo-token-plan-asr-llm-pipeline
+
+只安装 mimo-token-plan-asr-llm-pipeline/ 这个目录。安装后的 skill 根目录必须直接包含 SKILL.md、scripts/、references/。
+不要把仓库根目录的 README.md、README.en.md、README.zh.md 当作 skill 文件复制进去。
+```
+
+不建议只粘贴仓库根地址 `https://github.com/wsh-dot/podcast-to-summary-text` 作为自动安装地址。这个仓库根目录是说明文档入口，真正的 skill 在子目录里；如果安装器只检查根目录有没有 `SKILL.md`，直接粘根地址可能安装失败。
+
+如果 AI IDE 不支持从 GitHub 子目录自动安装，请使用下面的手动安装方式。
+
 先 clone 仓库：
 
 ```bash
