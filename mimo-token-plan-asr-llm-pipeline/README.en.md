@@ -134,6 +134,6 @@ python scripts/mimo_podcast_tool.py --self-test
 
 ## More References
 
-- [providers.md](references/providers.md): ASR and LLM provider boundaries.
-- [timeline-report-format.md](references/timeline-report-format.md): timeline report format.
+- [providers.en.md](references/providers.en.md): ASR and LLM provider boundaries.
+- [timeline-report-format.en.md](references/timeline-report-format.en.md): timeline report format.
 - [api-reference.en.md](references/api-reference.en.md): MiMo Token Plan API reference.

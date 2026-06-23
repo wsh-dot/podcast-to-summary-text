@@ -1,96 +1,98 @@
-# Timeline Report Format
+# 时间线报告格式
 
-Use this reference when changing the timeline report prompt or reviewing whether output matches the desired podcast-summary style.
+[English version](timeline-report-format.en.md)
 
-## Purpose
+当你修改时间线报告 prompt，或检查输出是否符合目标播客摘要风格时，阅读本文档。
 
-Generate a Markdown report that can be read as a detailed podcast note:
+## 目标
 
-- timecode sections that explain what was discussed at each point
-- concise but substantive paragraphs under each timecode
-- direct quotes only when supported by transcript text
-- a final overview table for scanning
+生成一篇可作为深度播客笔记阅读的 Markdown 报告：
 
-The ASR transcript is chunk-window based, not sentence-timestamp based. Treat every timestamp as an approximate window anchor.
+- 用时间点章节说明每个时间段讲了什么
+- 每个时间点下面有简洁但有信息量的段落
+- 只有在 transcript 有依据时才保留直接引用
+- 最后提供方便快速浏览的总览表
 
-The script should not ask one LLM call to produce the full body for long podcasts. Generate timeline sections in batches, then validate and merge them.
+ASR transcript 基于分片窗口，而不是逐句时间戳。所有时间点都应视为近似窗口锚点。
 
-## Required Structure
+脚本不应该让一次 LLM 调用生成整篇长播客正文。应按批次生成时间线章节，然后校验和合并。
+
+## 必需结构
 
 ```markdown
-# [Program title or file-derived title]
+# [节目标题或根据文件名生成的标题]
 
-> **嘉宾**：[only if provided or clearly present]
-> **主播**：[only if provided or clearly present]
-> **系列**：[only if provided]
+> **嘉宾**：[仅在用户提供或 transcript 中明确出现时填写]
+> **主播**：[仅在用户提供或 transcript 中明确出现时填写]
+> **系列**：[仅在用户提供时填写]
 > **时长**：约 X 小时 Y 分钟
 
 > **转写说明**：本文基于 MiMo ASR 分片转写稿整理。时间点来自 ASR 分片窗口，非逐句时间戳；已尽量保留原意并对明显转写错误做轻度校正。
 
 ---
 
-## 00:00-00:03 开场：[topic]
+## 00:00-00:03 开场：[主题]
 
-[2-4 short paragraphs explaining the opening.]
+[用 2-4 个短段落解释开场内容。]
 
-> "[short direct quote, only if present in transcript]"
+> "[仅在 transcript 中存在时保留短引用]"
 
-## 00:03-00:06 [topic]
+## 00:03-00:06 [主题]
 
-[2-5 paragraphs. Explain the argument, examples, conclusions, and transitions.]
+[用 2-5 个段落解释论点、案例、结论和上下文转折。]
 
-## 00:06-00:09 [topic]
+## 00:06-00:09 [主题]
 
-[One section must correspond to exactly one transcript window.]
+[一个章节必须严格对应一个 transcript 窗口。]
 
 ## 核心观点速览
 
 | 时间 | 章节 | 核心观点 | 关键论据 / 金句 |
 |------|------|----------|------------------|
-| 00:03 | [section title] | [one concise claim] | [supporting detail or quote] |
+| 00:03 | [章节标题] | [一句简洁观点] | [支撑细节或引用] |
 ```
 
-## Timecode Rules
+## 时间点规则
 
-- Use the `[HH:MM-HH:MM]` windows in the transcript as the only timestamp source.
-- Every transcript window must produce exactly one `## HH:MM-HH:MM Topic` section.
-- The report body section count must equal the transcript window count.
-- Do not merge adjacent windows, even when a topic spans multiple windows.
-- Do not skip quiet, short, refused, or noisy windows; create the section and mark the limitation.
-- Use `## 00:00-00:03 开场：Topic` for the opening window. Do not use an untimed `## 开场` heading.
-- Do not create minute or second precision that is not present in the transcript.
-- If one ASR window is missing, refused, or too short to summarize, mention it explicitly:
+- 只使用 transcript 中的 `[HH:MM-HH:MM]` 窗口作为时间来源。
+- 每个 transcript 窗口必须生成且只生成一个 `## HH:MM-HH:MM 主题` 章节。
+- 报告正文的时间章节数量必须等于 transcript 窗口数量。
+- 即使一个主题跨越多个窗口，也不要合并相邻窗口。
+- 不要跳过安静、很短、拒识或噪声窗口；要创建章节并标注限制。
+- 开场窗口使用 `## 00:00-00:03 开场：主题`。不要使用没有时间点的 `## 开场`。
+- 不要生成 transcript 中不存在的分钟级或秒级精度。
+- 如果某个 ASR 窗口缺失、拒识或太短，必须明确标注：
   `> ⚠️ 本窗口（00:24-00:27）转写内容缺失或不可用，以下只依据相邻片段整理。`
 
-## Batch Generation Rules
+## 分批生成规则
 
-- Default batch size should be 6 windows unless the user overrides `--timeline-batch-size`.
-- Each batch prompt must list the exact required windows and demand N windows -> N sections.
-- Batch outputs must contain only `## HH:MM-HH:MM Topic` sections, not the report H1, metadata block, transcription note, or final table.
-- Parse returned sections by heading. Keep only windows that exist in the transcript and ignore any hallucinated extra window.
-- If validation finds missing windows, rerun only those missing windows as repair prompts.
-- Fail before writing the report if any transcript window is still missing, duplicated, or replaced by a non-transcript time window.
-- Generate `## 核心观点速览` after the body is complete, one row per time section.
+- 默认批大小是 6 个窗口，除非用户通过 `--timeline-batch-size` 覆盖。
+- 每个 batch prompt 必须列出本批要求的精确窗口，并强制要求 N 个窗口 -> N 个章节。
+- batch 输出只能包含 `## HH:MM-HH:MM 主题` 章节，不要包含报告 H1、元信息 block、转写说明或最终表格。
+- 按标题解析返回章节。只保留 transcript 中存在的窗口，忽略幻觉生成的额外窗口。
+- 如果校验发现缺失窗口，只对缺失窗口重新发起修复 prompt。
+- 如果任何 transcript 窗口仍然缺失、重复，或被非 transcript 时间窗口替代，写文件前必须失败。
+- 正文完成后再生成 `## 核心观点速览`，每个时间章节对应一行。
 
-## Summary Mode Rules
+## 总结方式规则
 
-All summary modes must produce the same final structure and pass the same transcript-window validation.
+所有总结方式都必须产出同样的最终结构，并通过同样的 transcript 窗口校验。
 
-- `ide-agent` is the default when no LLM API is selected. The agent reads the windowed transcript, generates one `batch_*.md` file per 6 windows under `<base_name>_agent_sections/`, then runs `--manual-sections-dir` to merge and validate.
-- `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. The script generates sections, repairs missing windows, and merges internally.
-- `manual` is a fallback only when the user asks to export prompts or paste model outputs manually. Use `--export-ide-prompts`, then `--manual-sections-dir`.
-- Each batch output must contain only timed `## HH:MM-HH:MM Topic` sections.
-- Do not merge windows, skip windows, or create timestamps outside the transcript in any mode.
+- `ide-agent` 是未选择 LLM API 时的默认方式。Agent 读取带时间窗口的 transcript，每 6 个窗口生成一个 `<base_name>_agent_sections/batch_*.md` 文件，然后运行 `--manual-sections-dir` 合并和校验。
+- `api-llm` 只在用户明确选择 LLM API provider，或提供 `--llm-provider` / `--llm-api-key` 时使用。脚本内部生成章节、修复缺失窗口并合并。
+- `manual` 只作为用户要求导出 prompts 或手动粘贴模型输出时的 fallback。先使用 `--export-ide-prompts`，再使用 `--manual-sections-dir`。
+- 每个 batch 输出只能包含带时间点的 `## HH:MM-HH:MM 主题` 章节。
+- 任何模式下都不要合并窗口、跳过窗口，或创建 transcript 之外的时间戳。
 
-## Content Rules
+## 内容规则
 
-- Produce one timecode section per transcript window. For 47 windows, produce 47 sections.
-- Each section should be self-contained: what was said, why it matters, what example or argument supports it.
-- Keep direct quotes short and faithful. If wording is uncertain, paraphrase instead of quoting.
-- Correct obvious ASR spelling/name errors only when context makes the correction highly likely.
-- Do not invent guests, hosts, products, claims, quotes, or missing segment content.
-- If metadata is absent, omit that metadata line rather than writing "unknown".
+- 每个 transcript 窗口产出一个时间点章节。47 个窗口就产出 47 个章节。
+- 每个章节应自包含：讲了什么、为什么重要、用什么案例或论据支撑。
+- 直接引用要短且忠实。若原话不确定，改用转述。
+- 只在上下文高度明确时修正明显 ASR 拼写或人名错误。
+- 不要编造嘉宾、主播、产品、观点、引用或缺失片段内容。
+- 如果元信息不存在，省略该元信息行，不要写“未知”。
 
-## Brief Style
+## Brief 风格
 
-The `brief` report style is the legacy compact summary. It may include a short content timeline, but it is not required to produce full timecode sections or the final scan table.
+`brief` 报告风格是旧版紧凑摘要。它可以包含简短内容时间线，但不要求生成完整时间点章节，也不要求生成最终速览表。
