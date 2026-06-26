@@ -6,12 +6,14 @@
 
 ## 核心能力
 
-- 支持本地音频、本地视频、`yt-dlp` 可访问的 URL，以及已有 transcript。
+- 支持本地音频、本地视频、`yt-dlp` 可访问的 URL、Bilibili/B站 URL（优先 BBDown，可带 cookie），以及已有 transcript。
+- 默认质量链路：ASR 原始转写 -> LLM 校对 -> LLM 总结。
 - 默认生成严格的时间线报告。
 - 每个 `[HH:MM-HH:MM]` 转写窗口对应一个报告章节。
+- LLM 校对会补标点、断句、修正错别字、英文术语、人名和公司名，并保留时间窗口。
 - 报告末尾生成“核心观点速览”表格。
-- ASR 转写和 LLM 总结分离：ASR API 必需，LLM API 可选。
-- 默认推荐使用当前 IDE/Agent 模型总结，减少额外 LLM API 依赖。
+- ASR 转写和 LLM 校对/总结分离：ASR API 必需，LLM API 可选。
+- 默认推荐使用当前 IDE/Agent 模型校对和总结，减少额外 LLM API 依赖。
 
 ## 目录结构
 
@@ -94,17 +96,24 @@ winget install Gyan.FFmpeg
 pip install tencentcloud-sdk-python
 ```
 
+B站链接推荐安装 BBDown，并在需要登录态时提供 cookie：
+
+```powershell
+$env:BBDOWN_PATH = "C:\Tools\BBDown\BBDown.exe"
+$env:BILIBILI_COOKIE = "SESSDATA=...; bili_jct=...; DedeUserID=..."
+```
+
 ## 默认流程
 
 Agent 调用这个 skill 时，应该先一个问题一个问题地确认：
 
 1. ASR 转写来源：MiMo ASR、阿里 Qwen ASR、腾讯 ASR，或已有 transcript。
-2. 总结方式：当前 IDE/Agent 模型总结、API LLM 总结，或只导出 prompts。
+2. 校对和总结方式：当前 IDE/Agent 模型校对+总结、API LLM 自动校对+总结，或只导出 prompts。
 
 默认推荐：
 
 - ASR：由用户提供对应 provider 的 API 凭证。
-- 总结：`ide-agent`，也就是当前 IDE/Agent 模型总结。
+- 总结：`ide-agent`，也就是当前 IDE/Agent 模型先校对 ASR 窗口文本，再生成时间线章节。
 
 ## 常用命令
 
@@ -114,13 +123,25 @@ Agent 调用这个 skill 时，应该先一个问题一个问题地确认：
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
 ```
 
+B站链接只做 ASR 转写：
+
+```bash
+python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-xxxx" --bilibili-cookie "SESSDATA=..."
+```
+
 使用已有 transcript，并导出给当前 IDE/Agent 分批总结的 prompts：
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --export-ide-prompts
 ```
 
-使用已有 transcript 和 API LLM 生成报告：
+只使用 API LLM 生成校对稿：
+
+```bash
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --proofread-only --llm-provider kimi --llm-api-key "sk-xxxx"
+```
+
+使用已有 transcript 和 API LLM 生成报告（默认先校对，再总结）：
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --llm-provider kimi --llm-api-key "sk-xxxx"
@@ -135,7 +156,10 @@ python scripts/mimo_podcast_tool.py --self-test
 ## 更多参考
 
 - [providers.md](references/providers.md)：ASR 和 LLM provider 边界。
+- [bilibili-download.md](references/bilibili-download.md)：B站 BBDown/cookie 下载实现记录。
 - [providers.en.md](references/providers.en.md)：ASR 和 LLM provider 英文参考。
+- [proofreading.md](references/proofreading.md)：ASR 校对规则。
+- [proofreading.en.md](references/proofreading.en.md)：ASR proofreading reference.
 - [timeline-report-format.md](references/timeline-report-format.md)：时间线报告格式。
 - [timeline-report-format.en.md](references/timeline-report-format.en.md)：时间线报告格式英文参考。
 - [api-reference.md](references/api-reference.md)：MiMo Token Plan API 参考。

@@ -13,9 +13,18 @@ Generate a Markdown report that can be read as a detailed podcast note:
 - direct quotes only when supported by transcript text
 - a final overview table for scanning
 
-The ASR transcript is chunk-window based, not sentence-timestamp based. Treat every timestamp as an approximate window anchor.
+The ASR transcript is chunk-window based, not sentence-timestamp based. Treat every timestamp as an approximate window anchor. By default, reports should use the LLM-proofread `{base_name}_校对.txt`, not the dirty raw ASR transcript.
 
 The script should not ask one LLM call to produce the full body for long podcasts. Generate timeline sections in batches, then validate and merge them.
+
+## Proofreading Stage Rules
+
+- Proofread the ASR transcript before report generation: add punctuation, sentence boundaries, fix typos, English terms, person names, and company names.
+- Proofreading must preserve every `[HH:MM-HH:MM]` window label. Do not merge, skip, or invent windows.
+- Proofreading is not summarization; do not delete substantive content, compress claims, or rewrite conclusions.
+- In `api-llm` mode, the script proofreads automatically and saves `{base_name}_校对.txt`.
+- In `ide-agent` mode, the agent uses the current IDE model to proofread first, then generates `batch_*.md` sections from the calibrated transcript.
+- Skip proofreading only when the transcript was already manually corrected or comes from high-quality subtitles.
 
 ## Required Structure
 
@@ -27,7 +36,7 @@ The script should not ask one LLM call to produce the full body for long podcast
 > **系列**：[only if provided]
 > **时长**：约 X 小时 Y 分钟
 
-> **转写说明**：本文基于 MiMo ASR 分片转写稿整理。时间点来自 ASR 分片窗口，非逐句时间戳；已尽量保留原意并对明显转写错误做轻度校正。
+> **转写说明**：本文基于 ASR 分片转写稿经 LLM 校对后整理。时间点来自 ASR 分片窗口，非逐句时间戳；校对阶段仅修正标点、断句、明显错别字和专有名词，不做内容压缩。
 
 ---
 
@@ -78,9 +87,9 @@ The script should not ask one LLM call to produce the full body for long podcast
 
 All summary modes must produce the same final structure and pass the same transcript-window validation.
 
-- `ide-agent` is the default when no LLM API is selected. The agent reads the windowed transcript, generates one `batch_*.md` file per 6 windows under `<base_name>_agent_sections/`, then runs `--manual-sections-dir` to merge and validate.
-- `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. The script generates sections, repairs missing windows, and merges internally.
-- `manual` is a fallback only when the user asks to export prompts or paste model outputs manually. Use `--export-ide-prompts`, then `--manual-sections-dir`.
+- `ide-agent` is the default when no LLM API is selected. The agent reads the windowed transcript, proofreads each window first, generates one `batch_*.md` file per 6 windows under `<base_name>_agent_sections/`, then runs `--manual-sections-dir` to merge and validate.
+- `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. The script proofreads the transcript first, then generates sections, repairs missing windows, and merges internally.
+- `manual` is a fallback only when the user asks to export prompts or paste model outputs manually. Exported prompts must require the model to proofread ASR inside each window before writing summary sections. Use `--export-ide-prompts`, then `--manual-sections-dir`.
 - Each batch output must contain only timed `## HH:MM-HH:MM Topic` sections.
 - Do not merge windows, skip windows, or create timestamps outside the transcript in any mode.
 

@@ -9,11 +9,12 @@
 
 ## 这个 Skill 有什么用
 
-`mimo-token-plan-asr-llm-pipeline` 用来把播客、视频、网页链接或已有转写稿整理成带时间点的深度摘要 Markdown 报告。
+`mimo-token-plan-asr-llm-pipeline` 用来把播客、视频、网页链接（含 Bilibili/B站，优先 BBDown，可带 cookie）或已有转写稿整理成带时间点的深度摘要 Markdown 报告。默认质量链路是：ASR 转写 -> LLM 校对 -> LLM 总结。
 
 最终报告通常包含：
 
 - 按时间窗口生成的章节，例如 `00:00-00:03 开场主题`
+- 经过 LLM 校对的窗口转写稿：补标点、断句、修正错别字、英文术语、人名和公司名
 - 每个时间段讲了什么的概括
 - 只基于转写文本的关键引用
 - 转写说明
@@ -43,6 +44,8 @@ https://github.com/wsh-dot/podcast-to-summary-text/tree/main/mimo-token-plan-asr
 任务开始时，Agent 应该先按顺序询问两件事：
 
 1. ASR 转写来源和凭证：MiMo ASR、阿里 Qwen ASR、腾讯 ASR，或已有 transcript。
-2. 总结方式：默认推荐当前 IDE/Agent 模型总结，也可以选择 LLM API 总结或手动导出 prompts。
+2. 校对和总结方式：默认推荐当前 IDE/Agent 模型先校对再总结，也可以选择 LLM API 自动校对+总结，或手动导出 prompts。
 
 更多命令示例、依赖安装和 provider 说明请看 [中文完整说明](README.zh.md)。
+
+B站下载实现和 cookie 注意事项见 [bilibili-download.md](references/bilibili-download.md)。

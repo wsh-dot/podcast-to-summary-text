@@ -6,12 +6,14 @@ This directory is the installable root of the `mimo-token-plan-asr-llm-pipeline`
 
 ## Core Capabilities
 
-- Supports local audio, local video, URLs available through `yt-dlp`, and existing transcripts.
+- Supports local audio, local video, URLs available through `yt-dlp`, Bilibili URLs through BBDown with optional cookies, and existing transcripts.
+- Default quality chain: raw ASR transcript -> LLM proofreading -> LLM summary.
 - Generates strict timeline reports by default.
 - Maps every `[HH:MM-HH:MM]` transcript window to one report section.
+- LLM proofreading adds punctuation, sentence boundaries, and fixes typos, English terms, person names, and company names while preserving window labels.
 - Adds a final core ideas table.
-- Separates ASR transcription from LLM summarization: ASR API credentials are required, LLM API credentials are optional.
-- Recommends the current IDE/Agent model for summarization by default.
+- Separates ASR transcription from LLM proofreading/summarization: ASR API credentials are required, LLM API credentials are optional.
+- Recommends the current IDE/Agent model for proofreading and summarization by default.
 
 ## Directory Structure
 
@@ -94,17 +96,24 @@ Tencent ASR support also requires:
 pip install tencentcloud-sdk-python
 ```
 
+Bilibili URLs work best with BBDown. For login-gated or risk-controlled content, provide a browser cookie:
+
+```powershell
+$env:BBDOWN_PATH = "C:\Tools\BBDown\BBDown.exe"
+$env:BILIBILI_COOKIE = "SESSDATA=...; bili_jct=...; DedeUserID=..."
+```
+
 ## Default Workflow
 
 When the agent invokes this skill, it should ask one question at a time:
 
 1. ASR source: MiMo ASR, Alibaba Qwen ASR, Tencent ASR, or existing transcript.
-2. Summary mode: current IDE/Agent model, API LLM, or prompt export only.
+2. Proofreading and summary mode: current IDE/Agent model, API LLM, or prompt export only.
 
 Recommended defaults:
 
 - ASR: the user provides credentials for the selected ASR provider.
-- Summary: `ide-agent`, which means the current IDE/Agent model writes the timeline sections.
+- Summary: `ide-agent`, which means the current IDE/Agent model proofreads ASR windows first and then writes timeline sections.
 
 ## Common Commands
 
@@ -114,13 +123,25 @@ Transcribe only and save a windowed transcript:
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
 ```
 
+Transcribe a Bilibili URL:
+
+```bash
+python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-xxxx" --bilibili-cookie "SESSDATA=..."
+```
+
 Use an existing transcript and export prompts for the current IDE/Agent model:
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --export-ide-prompts
 ```
 
-Use an existing transcript and an API LLM to generate the report:
+Use an API LLM to generate only the calibrated transcript:
+
+```bash
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --proofread-only --llm-provider kimi --llm-api-key "sk-xxxx"
+```
+
+Use an existing transcript and an API LLM to generate the report. The script proofreads first, then summarizes:
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --llm-provider kimi --llm-api-key "sk-xxxx"
@@ -135,5 +156,8 @@ python scripts/mimo_podcast_tool.py --self-test
 ## More References
 
 - [providers.en.md](references/providers.en.md): ASR and LLM provider boundaries.
+- [bilibili-download.md](references/bilibili-download.md): Bilibili BBDown/cookie download notes.
+- [proofreading.en.md](references/proofreading.en.md): ASR proofreading rules.
+- [proofreading.md](references/proofreading.md): Chinese ASR proofreading reference.
 - [timeline-report-format.en.md](references/timeline-report-format.en.md): timeline report format.
 - [api-reference.en.md](references/api-reference.en.md): MiMo Token Plan API reference.

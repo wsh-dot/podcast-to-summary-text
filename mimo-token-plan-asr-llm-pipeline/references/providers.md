@@ -7,7 +7,8 @@
 ## Provider 边界
 
 - **ASR provider**：把音频分片转成文本。报告引擎会把文本包装成 `[HH:MM-HH:MM]` 时间窗口。
-- **LLM provider**：根据带时间窗口的 transcript 生成时间线章节和最终表格。
+- **Proofreading LLM task**：把 ASR 原始窗口转写校对成更可读的 `{base_name}_校对.txt`，必须保留窗口标签。
+- **Summary LLM task**：根据校对后的 transcript 生成时间线章节和最终表格。
 - **报告引擎**：负责窗口分批、校验章节覆盖、修复缺失窗口、忽略幻觉出来的额外窗口，并写出最终 Markdown 报告。
 
 不要把某个厂商特有的请求 payload 放进报告引擎里。
@@ -16,9 +17,9 @@
 
 - 任务开始时，在下载、ASR 或 LLM 调用之前，先让用户选择 ASR 来源和总结方式。必须串行询问：先问 ASR 来源，收到并记录答案后，再问总结方式。可用交互式选择 UI 时，只展示当前这一个问题；否则用文字询问并等待用户回答。
 - 对于音频、视频或 URL 输入，**ASR 凭证是必需的**；除非用户已经提供带时间窗口的 transcript。
-- **LLM 凭证是可选的**。只有当用户明确选择 API LLM 总结时才需要。
+- **LLM 凭证是可选的**。只有当用户明确选择 API LLM 校对/总结时才需要。
 - MiMo `--api-key` 可能只用于 ASR。不要因为用户提供了 MiMo key，就推断用户也同意用 MiMo LLM 总结；除非用户选择了 API LLM 模式。
-- 如果用户有 ASR 凭证但没有 LLM 凭证，默认使用当前 IDE/Agent 模型辅助总结路线。
+- 如果用户有 ASR 凭证但没有 LLM 凭证，默认使用当前 IDE/Agent 模型辅助校对和总结路线。
 
 ASR 凭证矩阵：
 
@@ -51,7 +52,7 @@ ASR 凭证矩阵：
 
 除 MiMo 外，所有 LLM provider 都按 OpenAI-compatible `chat/completions` 客户端调用。
 
-当前 IDE 模型不是脚本内可直接调用的 provider，除非该 IDE 暴露了 OpenAI-compatible API 端点。对于没有这种端点的 IDE 模型总结，Agent 需要生成 `batch_*.md` 章节文件，再通过 `--manual-sections-dir` 合并；不要添加假的 `--llm-provider ide` 标签。
+当前 IDE 模型不是脚本内可直接调用的 provider，除非该 IDE 暴露了 OpenAI-compatible API 端点。对于没有这种端点的 IDE 模型校对/总结，Agent 需要先逐窗口校对 transcript，再生成 `batch_*.md` 章节文件，最后通过 `--manual-sections-dir` 合并；不要添加假的 `--llm-provider ide` 标签。
 
 | Provider | CLI | 默认 Base URL | 默认模型 | 环境变量 |
 |---|---|---|---|---|
@@ -73,15 +74,16 @@ ASR 凭证矩阵：
 
 ## 推荐组合
 
-- 未选择 LLM API 时的默认路线：任意内置 ASR provider + 当前 IDE/Agent 辅助总结。
-- 纯 API 路线：内置 ASR provider + 明确指定 `--llm-provider` / `--llm-api-key`。
+- 未选择 LLM API 时的默认路线：任意内置 ASR provider + 当前 IDE/Agent 辅助校对和总结。
+- 纯 API 路线：内置 ASR provider + 明确指定 `--llm-provider` / `--llm-api-key`，脚本自动先校对再总结。
 - 降低对 MiMo ASR 的依赖：阿里 Qwen ASR + 任意 OpenAI-compatible LLM。
 - 腾讯 ASR 适合已经有腾讯云账号和录音识别额度的用户，但它是异步任务，每个分片会更慢。
-- 智谱、Kimi、MiniMax、阿里、腾讯混元都可以在 transcript 窗口可靠时生成目标报告；脚本的分批和校验机制比单纯上下文长度更关键。
+- 智谱、Kimi、MiniMax、阿里、腾讯混元都可以在 transcript 窗口可靠时完成校对和生成目标报告；脚本的分批和校验机制比单纯上下文长度更关键。
 
 ## Provider 变更检查清单
 
 - 保持 transcript 窗口格式不变：`[HH:MM-HH:MM]\ntext`。
+- 校对阶段必须保持同样的窗口数量和顺序；不要让 provider prompt 改成摘要任务。
 - 运行 `python scripts/mimo_podcast_tool.py --self-test`。
 - 运行 `python -m py_compile scripts/mimo_podcast_tool.py`。
 - 长播客前先做一次短音频真实 ASR 测试。

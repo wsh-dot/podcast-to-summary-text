@@ -21,6 +21,7 @@ It is designed for long-form audio and video content. The final report contains:
 
 - timestamped timeline sections
 - one report section for each ASR transcript window
+- LLM proofreading before summary: punctuation, sentence boundaries, typos, English terms, person names, and company names
 - concise explanations of what each segment discussed
 - short direct quotes only when supported by transcript text
 - a transcription note
@@ -49,22 +50,22 @@ The default report style is a strict timeline report:
 - URLs supported by `yt-dlp`, such as many podcast pages, YouTube links, and Bilibili links when access is available
 - Existing transcripts with `[HH:MM-HH:MM]` windows
 
-## Summary Modes
+## Proofreading And Summary Modes
 
-The skill separates ASR transcription from summary generation.
+The skill separates ASR transcription, LLM proofreading, and LLM summary generation. Raw ASR often lacks punctuation and contains typos, broken English terms, and misrecognized names, so the default flow proofreads before summarizing.
 
 ASR credentials are required when starting from audio, video, or URL input. LLM credentials are optional.
 
 The agent should ask one question at a time at task start:
 
 1. Which ASR source should be used?
-2. After the ASR answer is recorded, which summary mode should be used?
+2. After the ASR answer is recorded, which proofreading/summary mode should be used?
 
-Summary modes:
+Proofreading/summary modes:
 
-- `ide-agent`: use the current IDE/Agent model to summarize, then use the script to merge and validate. This is the recommended default.
-- `api-llm`: use an API LLM provider such as MiMo, Kimi, Zhipu, Alibaba, Tencent, MiniMax, or an OpenAI-compatible endpoint.
-- `manual`: export prompts and let the user paste model outputs manually.
+- `ide-agent`: use the current IDE/Agent model to proofread ASR first, then summarize; the script merges and validates. This is the recommended default.
+- `api-llm`: use an API LLM provider such as MiMo, Kimi, Zhipu, Alibaba, Tencent, MiniMax, or an OpenAI-compatible endpoint to proofread and summarize automatically.
+- `manual`: export prompts and let the user paste model outputs manually for proofreading and summary.
 
 ## Installation
 
@@ -170,21 +171,21 @@ Run commands from the skill directory:
 cd podcast-to-summary-text/mimo-token-plan-asr-llm-pipeline
 ```
 
-MiMo ASR, then IDE/Agent summary:
+MiMo ASR, then IDE/Agent proofreading and summary:
 
 ```bash
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
-Alibaba Qwen ASR, then IDE/Agent summary:
+Alibaba Qwen ASR, then IDE/Agent proofreading and summary:
 
 ```bash
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
-Existing transcript, then API LLM summary:
+Existing transcript, then API LLM proofreading and summary:
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --llm-provider kimi --llm-api-key "sk-xxxx"

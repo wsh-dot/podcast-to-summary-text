@@ -21,6 +21,7 @@ mimo-token-plan-asr-llm-pipeline/
 
 - 带时间点的章节
 - 每个 ASR 转写窗口对应一个报告章节
+- ASR 原始文本会先经 LLM 校对，再进入总结阶段
 - 每个时间段讲了什么的概括
 - 只在转写稿有依据时保留短引用
 - 转写说明
@@ -49,22 +50,22 @@ mimo-token-plan-asr-llm-pipeline/
 - `yt-dlp` 支持的 URL，例如很多播客页面、YouTube 链接、可访问的 B 站链接
 - 已有的带 `[HH:MM-HH:MM]` 时间窗口的 transcript
 
-## 总结方式
+## 校对和总结方式
 
-这个 skill 把 ASR 转写和 LLM 总结拆开处理。
+这个 skill 把 ASR 转写、LLM 校对和 LLM 总结拆开处理。ASR 原始文本通常没有标点、错别字多、英文术语和人名公司名容易识别错，所以默认先让 LLM 校对，再让 LLM 总结。
 
 如果从音频、视频或 URL 开始，必须提供 ASR 凭证。LLM API 凭证不是必须的。
 
 Agent 在任务开始时应该一个问题一个问题地询问：
 
 1. ASR 转写来源用哪个？
-2. 等 ASR 来源回答并记录后，再问总结方式用哪个？
+2. 等 ASR 来源回答并记录后，再问校对和总结方式用哪个？
 
-总结方式有三种：
+校对和总结方式有三种：
 
-- `ide-agent`：用当前 IDE/Agent 模型总结，再用脚本合并和校验。默认推荐这个。
-- `api-llm`：用 MiMo、Kimi、智谱、阿里、腾讯、MiniMax 或 OpenAI-compatible API 总结。
-- `manual`：只导出 prompts，用户自己复制到其它模型里总结。
+- `ide-agent`：用当前 IDE/Agent 模型先校对 ASR，再总结；最后用脚本合并和校验。默认推荐这个。
+- `api-llm`：用 MiMo、Kimi、智谱、阿里、腾讯、MiniMax 或 OpenAI-compatible API 自动校对和总结。
+- `manual`：只导出 prompts，用户自己复制到其它模型里完成校对和总结。
 
 ## 安装方式
 
@@ -170,21 +171,21 @@ pip install tencentcloud-sdk-python
 cd podcast-to-summary-text/mimo-token-plan-asr-llm-pipeline
 ```
 
-MiMo ASR，然后用当前 IDE/Agent 模型总结：
+MiMo ASR，然后用当前 IDE/Agent 模型校对和总结：
 
 ```bash
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
-阿里 Qwen ASR，然后用当前 IDE/Agent 模型总结：
+阿里 Qwen ASR，然后用当前 IDE/Agent 模型校对和总结：
 
 ```bash
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
-已有 transcript，然后用 API LLM 总结：
+已有 transcript，然后用 API LLM 自动校对和总结：
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --llm-provider kimi --llm-api-key "sk-xxxx"

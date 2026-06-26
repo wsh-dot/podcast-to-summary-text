@@ -7,7 +7,8 @@ Use this reference only when switching ASR/LLM providers or changing provider de
 ## Provider Boundaries
 
 - **ASR provider**: turns an audio chunk into text. The report engine wraps that text in `[HH:MM-HH:MM]` windows.
-- **LLM provider**: generates timeline sections and the final table from windowed transcript text.
+- **Proofreading LLM task**: turns raw windowed ASR into a readable `{base_name}_校对.txt` while preserving labels.
+- **Summary LLM task**: generates timeline sections and the final table from the calibrated transcript.
 - **Report engine**: batches windows, validates section coverage, repairs missing windows, ignores hallucinated extra windows, and writes the final Markdown report.
 
 Do not put vendor-specific request payloads inside the report engine.
@@ -16,9 +17,9 @@ Do not put vendor-specific request payloads inside the report engine.
 
 - At task start, ask the user to choose the ASR source and summary mode before running downloads, ASR, or LLM calls. Ask serially: first ASR source, then after the answer is recorded, ask summary mode. Use an interactive choice UI for the current single question when available; otherwise ask in text and wait.
 - **ASR credentials are required** for audio/video/URL input unless the user already provides a windowed transcript.
-- **LLM credentials are optional**. They are needed only when the user explicitly selects API LLM summary.
+- **LLM credentials are optional**. They are needed only when the user explicitly selects API LLM proofreading/summary.
 - A MiMo `--api-key` may be used for ASR only. Do not infer that the user wants MiMo LLM summary unless they selected API LLM mode.
-- If the user has ASR credentials but no LLM credentials, use the agent-assisted IDE summary route by default.
+- If the user has ASR credentials but no LLM credentials, use the agent-assisted IDE proofreading and summary route by default.
 
 ASR credential matrix:
 
@@ -51,7 +52,7 @@ Tencent-specific options:
 
 All non-MiMo LLM providers use an OpenAI-compatible chat/completions client.
 
-The current IDE model is not a callable script provider unless the IDE exposes an OpenAI-compatible API endpoint. For IDE-model summaries without such an endpoint, the agent generates `batch_*.md` section files and then uses `--manual-sections-dir`; do not add a fake `--llm-provider ide` label.
+The current IDE model is not a callable script provider unless the IDE exposes an OpenAI-compatible API endpoint. For IDE-model proofreading/summaries without such an endpoint, the agent first proofreads the transcript windows, then generates `batch_*.md` section files and uses `--manual-sections-dir`; do not add a fake `--llm-provider ide` label.
 
 | Provider | CLI | Default base URL | Default model | Env vars |
 |---|---|---|---|---|
@@ -73,15 +74,16 @@ Override defaults with:
 
 ## Recommended Combinations
 
-- Default when no LLM API is selected: any supported ASR provider + agent-assisted IDE summary.
-- API-only path: supported ASR provider + explicit `--llm-provider` / `--llm-api-key`.
+- Default when no LLM API is selected: any supported ASR provider + agent-assisted IDE proofreading and summary.
+- API-only path: supported ASR provider + explicit `--llm-provider` / `--llm-api-key`; the script automatically proofreads before summary.
 - Lower ASR dependency on MiMo: Alibaba Qwen ASR + any OpenAI-compatible LLM.
 - Tencent ASR is useful when a Tencent Cloud account and recording-recognition quota are already available, but it is async and slower per chunk.
-- Zhipu, Kimi, MiniMax, Alibaba, Tencent Hunyuan can all generate the target report if the transcript already has reliable windows; the script's batching/validation matters more than raw context length.
+- Zhipu, Kimi, MiniMax, Alibaba, Tencent Hunyuan can all proofread and generate the target report if the transcript already has reliable windows; the script's batching/validation matters more than raw context length.
 
 ## Provider Change Checklist
 
 - Keep transcript window format unchanged: `[HH:MM-HH:MM]\ntext`.
+- The proofreading stage must keep the same window count and order; do not let provider prompts become summary tasks.
 - Run `python scripts/mimo_podcast_tool.py --self-test`.
 - Run `python -m py_compile scripts/mimo_podcast_tool.py`.
 - Do a short real ASR test before a long podcast.
