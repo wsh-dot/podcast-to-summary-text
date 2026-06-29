@@ -76,6 +76,8 @@ The script should not ask one LLM call to produce the full body for long podcast
 ## Batch Generation Rules
 
 - Default batch size should be 6 windows unless the user overrides `--timeline-batch-size`.
+- API LLM mode runs at most two independent batches concurrently by default. Use `--llm-concurrency 1` for serial execution or strict provider rate limits.
+- In `separate` mode, run proofreading -> immediate summary for each batch instead of waiting for every window to be proofread first.
 - Each batch prompt must list the exact required windows and demand N windows -> N sections.
 - Batch outputs must contain only `## HH:MM-HH:MM Topic` sections, not the report H1, metadata block, transcription note, or final table.
 - Parse returned sections by heading. Keep only windows that exist in the transcript and ignore any hallucinated extra window.
@@ -88,7 +90,7 @@ The script should not ask one LLM call to produce the full body for long podcast
 All summary modes must produce the same final structure and pass the same transcript-window validation.
 
 - `ide-agent` is the default when no LLM API is selected. The agent reads the windowed transcript, proofreads each window first, generates one `batch_*.md` file per 6 windows under `<base_name>_agent_sections/`, then runs `--manual-sections-dir` to merge and validate.
-- `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. The script proofreads the transcript first, then generates sections, repairs missing windows, and merges internally.
+- `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. Default `separate` mode pipelines proofreading and summary per batch and saves the calibrated transcript; `inline` proofreads inside summary calls without saving it; `skip` uses the input directly.
 - `manual` is a fallback only when the user asks to export prompts or paste model outputs manually. Exported prompts must require the model to proofread ASR inside each window before writing summary sections. Use `--export-ide-prompts`, then `--manual-sections-dir`.
 - Each batch output must contain only timed `## HH:MM-HH:MM Topic` sections.
 - Do not merge windows, skip windows, or create timestamps outside the transcript in any mode.

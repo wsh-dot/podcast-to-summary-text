@@ -7,23 +7,29 @@ Default behavior:
   1. Split audio into 3-minute ASR windows.
   2. Transcribe each window with the configured ASR provider.
   3. Save a timestamp-window transcript when --save-transcript is set.
-  4. Proofread the windowed transcript before summary unless disabled.
-  5. Generate a podcast-style Markdown report in batches, or export IDE prompts for manual summary.
+  4. Pipeline proofreading -> summary per batch, proofread inline, or reuse calibrated input.
+  5. Generate batches with bounded LLM concurrency, or export IDE prompts for manual summary.
   6. Validate that every transcript window has exactly one report section.
 """
 
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 # ============================================================
@@ -95,6 +101,50 @@ DEFAULT_SEGMENT_MINUTES = 3
 DEFAULT_TIMELINE_BATCH_SIZE = 6
 DEFAULT_PROOFREAD_BATCH_SIZE = 6
 DEFAULT_PROOFREAD_MIN_RATIO = 0.55
+DEFAULT_LLM_CONCURRENCY = 2
+
+BBDOWN_VERSION = "1.6.3"
+BBDOWN_RELEASE_BASE_URL = "https://github.com/nilaoda/BBDown/releases/download"
+BBDOWN_MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
+BBDOWN_DOWNLOAD_TIMEOUT = 60
+BBDOWN_ASSETS = {
+    "win-x64": {
+        "platform": "win-x64",
+        "asset": "BBDown_1.6.3_20240814_win-x64.zip",
+        "sha256": "40f1e2af0d4e74df765c6f93d2e931f9bea201d5168d0bc62dc35a54b7e0ec02",
+        "binary": "BBDown.exe",
+    },
+    "win-arm64": {
+        "platform": "win-arm64",
+        "asset": "BBDown_1.6.3_20240814_win-arm64.zip",
+        "sha256": "da8fc9cbf1031f4c4ca97af82d98bbfd1bbc55bd8ea49602da8d3d1613c190ff",
+        "binary": "BBDown.exe",
+    },
+    "linux-x64": {
+        "platform": "linux-x64",
+        "asset": "BBDown_1.6.3_20240814_linux-x64.zip",
+        "sha256": "ec233b7d8d40b1cc4447dac05be343f53a757dc605743a8808abaa8e97e5d10e",
+        "binary": "BBDown",
+    },
+    "linux-arm64": {
+        "platform": "linux-arm64",
+        "asset": "BBDown_1.6.3_20240814_linux-arm64.zip",
+        "sha256": "f58e0a18df1a589375428a0af27ea61f5ce96ffaf67d115f335d5f9bee9a34dc",
+        "binary": "BBDown",
+    },
+    "osx-x64": {
+        "platform": "osx-x64",
+        "asset": "BBDown_1.6.3_20240814_osx-x64.zip",
+        "sha256": "262c15ca7890898560d00e5ffd5ada1864fbd9d0d58ac4ee492c9f3e73f3ae5f",
+        "binary": "BBDown",
+    },
+    "osx-arm64": {
+        "platform": "osx-arm64",
+        "asset": "BBDown_1.6.3_20240814_osx-arm64.zip",
+        "sha256": "4df84014d818bd6dff2b365b847645340e8955c4450fe965688f41af89a38baa",
+        "binary": "BBDown",
+    },
+}
 
 LLM_MAX_TOKENS_STANDARD = 4096
 LLM_MAX_TOKENS_PROOFREAD_BATCH = 8192
@@ -139,6 +189,37 @@ def positive_float(value):
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than 0")
     return parsed
+
+
+def select_proofread_mode(requested_mode, no_proofread, transcript_path):
+    """Resolve the effective proofreading mode without reprocessing calibrated input."""
+    if no_proofread:
+        return "skip"
+    if requested_mode:
+        return requested_mode
+    if transcript_path and Path(transcript_path).stem.endswith(("_校对", "_calibrated")):
+        return "skip"
+    return "separate"
+
+
+def ordered_parallel_map(worker, items, max_workers):
+    """Run independent jobs with bounded concurrency and preserve input order."""
+    items = list(items)
+    if not items:
+        return []
+    if max_workers <= 1:
+        return [worker(item) for item in items]
+
+    results = [None] * len(items)
+    worker_count = min(max_workers, len(items))
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {
+            pool.submit(worker, item): index
+            for index, item in enumerate(items)
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return results
 
 
 def format_timecode(seconds, round_up=False):
@@ -201,7 +282,15 @@ def is_url(value):
 
 
 def is_bilibili_url(url):
-    return is_url(url) and ("bilibili.com" in url or "b23.tv" in url)
+    if not is_url(url):
+        return False
+    hostname = (urlparse(url).hostname or "").lower().rstrip(".")
+    return (
+        hostname == "bilibili.com"
+        or hostname.endswith(".bilibili.com")
+        or hostname == "b23.tv"
+        or hostname.endswith(".b23.tv")
+    )
 
 
 def extract_bilibili_bvid(url):
@@ -239,12 +328,148 @@ def check_yt_dlp():
     return shutil.which("yt-dlp") is not None
 
 
-def resolve_bbdown_path(preferred_path=None):
-    candidates = []
+def bbdown_asset_for_platform(system_name=None, machine=None):
+    system_key = (system_name or platform.system()).strip().lower()
+    machine_key = (machine or platform.machine()).strip().lower()
+
+    if machine_key in {"amd64", "x86_64", "x64"}:
+        architecture = "x64"
+    elif machine_key in {"arm64", "aarch64"}:
+        architecture = "arm64"
+    else:
+        architecture = machine_key
+
+    system_prefix = {
+        "windows": "win",
+        "linux": "linux",
+        "darwin": "osx",
+    }.get(system_key)
+    platform_key = f"{system_prefix}-{architecture}" if system_prefix else ""
+    if platform_key not in BBDOWN_ASSETS:
+        raise RuntimeError(
+            f"当前平台不支持自动安装 BBDown: {system_name or platform.system()} "
+            f"{machine or platform.machine()}。请通过 --bbdown-path 或 BBDOWN_PATH 指定可执行文件。"
+        )
+    return BBDOWN_ASSETS[platform_key]
+
+
+def default_bbdown_cache_root(system_name=None):
+    system_key = (system_name or platform.system()).strip().lower()
+    if system_key == "windows":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    elif system_key == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    return base / "podcast-to-summary-text" / "bbdown"
+
+
+def bbdown_cached_executable(cache_root=None, system_name=None, machine=None):
+    asset = bbdown_asset_for_platform(system_name, machine)
+    root = Path(cache_root) if cache_root else default_bbdown_cache_root(system_name)
+    return root / BBDOWN_VERSION / asset["platform"] / asset["binary"]
+
+
+def install_bbdown(cache_root=None, system_name=None, machine=None, opener=None):
+    asset = bbdown_asset_for_platform(system_name, machine)
+    executable = bbdown_cached_executable(
+        cache_root=cache_root,
+        system_name=system_name,
+        machine=machine,
+    )
+    if executable.is_file():
+        print(f"复用已缓存 BBDown {BBDOWN_VERSION}: {executable}")
+        return executable
+
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    download_url = f"{BBDOWN_RELEASE_BASE_URL}/{BBDOWN_VERSION}/{asset['asset']}"
+    archive_handle = tempfile.NamedTemporaryFile(
+        prefix=f"{asset['asset']}.",
+        suffix=".part",
+        dir=executable.parent,
+        delete=False,
+    )
+    archive_path = Path(archive_handle.name)
+    archive_handle.close()
+    binary_handle = tempfile.NamedTemporaryFile(
+        prefix=f"{asset['binary']}.",
+        suffix=".part",
+        dir=executable.parent,
+        delete=False,
+    )
+    binary_path = Path(binary_handle.name)
+    binary_handle.close()
+
+    print(f"未找到 BBDown，下载固定版本 {BBDOWN_VERSION}: {asset['asset']}")
+    request = Request(download_url, headers={"User-Agent": "podcast-to-summary-text/1"})
+    open_url = opener or urlopen
+    try:
+        try:
+            response_context = open_url(request, timeout=BBDOWN_DOWNLOAD_TIMEOUT)
+            with response_context as response, archive_path.open("wb") as output:
+                declared_size = response.headers.get("Content-Length")
+                if declared_size and int(declared_size) > BBDOWN_MAX_DOWNLOAD_BYTES:
+                    raise RuntimeError("BBDown 下载超过安全上限 32 MiB。")
+
+                digest = hashlib.sha256()
+                downloaded_size = 0
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    downloaded_size += len(chunk)
+                    if downloaded_size > BBDOWN_MAX_DOWNLOAD_BYTES:
+                        raise RuntimeError("BBDown 下载超过安全上限 32 MiB。")
+                    digest.update(chunk)
+                    output.write(chunk)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"BBDown 下载失败: {exc}") from exc
+
+        actual_hash = digest.hexdigest()
+        if actual_hash.lower() != asset["sha256"].lower():
+            raise RuntimeError(
+                "BBDown ZIP SHA-256 校验失败: "
+                f"expected {asset['sha256']}, got {actual_hash}"
+            )
+
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                if asset["binary"] not in archive.namelist():
+                    raise RuntimeError(
+                        f"BBDown ZIP 根目录缺少预期可执行文件: {asset['binary']}"
+                    )
+                with archive.open(asset["binary"]) as source, binary_path.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+        except RuntimeError:
+            raise
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError(f"BBDown ZIP 文件损坏: {exc}") from exc
+
+        if (system_name or platform.system()).strip().lower() != "windows":
+            os.chmod(binary_path, 0o755)
+        os.replace(binary_path, executable)
+        print(f"BBDown {BBDOWN_VERSION} 已安装并通过 SHA-256 校验: {executable}")
+        return executable
+    finally:
+        archive_path.unlink(missing_ok=True)
+        binary_path.unlink(missing_ok=True)
+
+
+def resolve_bbdown_path(preferred_path=None, auto_install=True, cache_root=None):
     if preferred_path:
-        candidates.append(preferred_path)
-    if os.environ.get("BBDOWN_PATH"):
-        candidates.append(os.environ["BBDOWN_PATH"])
+        preferred = Path(preferred_path).expanduser()
+        if not preferred.is_file():
+            raise FileNotFoundError(f"--bbdown-path 指定的文件不存在: {preferred}")
+        return str(preferred)
+
+    environment_path = os.environ.get("BBDOWN_PATH", "").strip()
+    if environment_path:
+        configured = Path(environment_path).expanduser()
+        if not configured.is_file():
+            raise FileNotFoundError(f"BBDOWN_PATH 指定的文件不存在: {configured}")
+        return str(configured)
 
     executable_names = ["BBDown.exe", "BBDown"] if os.name == "nt" else ["BBDown_Mac", "BBDown"] if sys.platform == "darwin" else ["BBDown"]
     for name in executable_names:
@@ -255,15 +480,19 @@ def resolve_bbdown_path(preferred_path=None):
     skill_root = Path(__file__).resolve().parents[1]
     for base_dir in (Path.cwd(), skill_root):
         for name in executable_names:
-            candidates.append(base_dir / "BBDown" / name)
+            candidate = base_dir / "BBDown" / name
+            if candidate.is_file():
+                return str(candidate)
 
-    for candidate in candidates:
-        candidate_path = Path(candidate).expanduser()
-        if candidate_path.exists():
-            return str(candidate_path)
+    cached = bbdown_cached_executable(cache_root=cache_root)
+    if cached.is_file():
+        return str(cached)
+    if auto_install:
+        return str(install_bbdown(cache_root=cache_root))
 
     raise FileNotFoundError(
-        "未找到 BBDown。请安装 BBDown，或通过 --bbdown-path / BBDOWN_PATH 指定可执行文件。"
+        "未找到 BBDown，且自动安装已关闭。请安装 BBDown，或通过 "
+        "--bbdown-path / BBDOWN_PATH 指定可执行文件。"
     )
 
 
@@ -355,8 +584,15 @@ def download_audio(url, output_dir, cookie=None, cookies_file=None, cookies_from
     return downloaded[0]
 
 
-def download_bilibili_audio(url, output_dir, bbdown_path=None, cookie=None, timeout=300):
-    executable = resolve_bbdown_path(bbdown_path)
+def download_bilibili_audio(
+    url,
+    output_dir,
+    bbdown_path=None,
+    cookie=None,
+    timeout=300,
+    auto_install=True,
+):
+    executable = resolve_bbdown_path(bbdown_path, auto_install=auto_install)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1065,7 +1301,12 @@ def build_report_header(metadata):
         "> **转写说明**：本文基于 ASR 分片转写稿经 LLM 校对后整理。"
         "时间点来自分片窗口，非逐句时间戳；校对阶段仅修正标点、断句、明显错别字和专有名词，不做内容压缩。"
     )
-    if metadata.get("transcript_stage") != "calibrated":
+    if metadata.get("transcript_stage") == "inline_proofread":
+        note = (
+            "> **转写说明**：本文基于 ASR 分片转写稿整理，摘要生成时在窗口内部完成 LLM 校对。"
+            "时间点来自分片窗口，非逐句时间戳；内联模式不单独生成校对稿。"
+        )
+    elif metadata.get("transcript_stage") != "calibrated":
         note = (
             "> **转写说明**：本文基于 ASR 分片转写稿整理。"
             "时间点来自分片窗口，非逐句时间戳；正文按每个 transcript 窗口逐段生成并校验，尽量保留原意并对明显转写错误做轻度校正。"
@@ -1111,7 +1352,7 @@ def build_proofread_batch_prompt(blocks, metadata, repair=False):
 """
 
 
-def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False):
+def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False, inline_proofread=False):
     required_windows = "\n".join(f"- {block['window']}" for block in blocks)
     detail_instruction = (
         "每节写 2-4 个自然段；如果信息密度高，可写到 5 段。"
@@ -1119,6 +1360,12 @@ def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False):
         else "每节写 1-3 个自然段。"
     )
     repair_note = "这是缺失窗口修复任务，只输出下面列出的窗口章节。" if repair else ""
+    proofread_instruction = (
+        "8. 先在每个窗口内部完成校对：修正标点、断句、明显错别字和专有名词；"
+        "再基于校对后的含义写摘要，但不要在输出中展示完整校对稿。"
+        if inline_proofread
+        else "8. 直接基于输入文本生成摘要，不要输出完整 transcript。"
+    )
 
     return f"""请基于以下带时间窗口的 ASR 转写文本，生成逐窗口播客深度解读章节。
 
@@ -1138,7 +1385,7 @@ def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False):
 5. 如果某个窗口内容很少、噪声多或识别失败，也必须生成对应章节，并说明该窗口限制。
 6. 每节概括这一窗口讲了什么、为什么重要、使用了什么例子或论据。{detail_instruction}
 7. 只在转写文本支持时使用短引用；不能确定原话时改为转述。
-8. 输入文本应优先使用已经校对过的 transcript；如果仍是原始 ASR，请先在窗口内校正标点、断句、错别字和专有名词，再基于校正后的含义写摘要，但不要在输出中展示完整校对稿。
+{proofread_instruction}
 
 转写文本：
 {blocks_to_transcript(blocks)}
@@ -1297,64 +1544,50 @@ def generate_proofread_batch(llm_provider, blocks, metadata, min_ratio, repair=F
     return collected, duplicates, extras, invalid
 
 
-def proofread_transcript(llm_provider, transcript, metadata, batch_size=DEFAULT_PROOFREAD_BATCH_SIZE, min_ratio=DEFAULT_PROOFREAD_MIN_RATIO):
-    blocks = parse_transcript_blocks(transcript)
-    if not blocks:
-        raise RuntimeError("校对需要带 `[HH:MM-HH:MM]` 的 transcript。")
+def proofread_blocks_with_repair(llm_provider, blocks, metadata, min_ratio, label="校对转写"):
+    """Proofread one independent block group, repairing or falling back per window."""
+    collected, duplicates, extras, invalid = generate_proofread_batch(
+        llm_provider,
+        blocks,
+        metadata,
+        min_ratio=min_ratio,
+        repair=False,
+        label=label,
+    )
+    if duplicates:
+        print(f"  警告: {label} 输出重复窗口，已保留首次出现: {', '.join(duplicates)}")
+    if extras:
+        print(f"  警告: {label} 输出额外窗口，已忽略: {', '.join(extras)}")
+    if invalid:
+        print(f"  警告: {label} 输出过短或格式异常，将逐窗口修复: {', '.join(invalid)}")
 
-    print(f"检测到 {len(blocks)} 个 transcript 窗口；按每批 {batch_size} 个窗口校对。")
-    proofread_by_window = {}
-    invalid_windows = []
-    total_batches = math.ceil(len(blocks) / batch_size)
-
-    for batch_index, batch in enumerate(chunk_list(blocks, batch_size), start=1):
-        first_window = batch[0]["window"]
-        last_window = batch[-1]["window"]
-        collected, duplicates, extras, invalid = generate_proofread_batch(
+    blocks_by_window = {block["window"]: block for block in blocks}
+    repair_windows = [
+        block["window"]
+        for block in blocks
+        if block["window"] not in collected
+    ]
+    for window in repair_windows:
+        repaired, repair_duplicates, repair_extras, repair_invalid = generate_proofread_batch(
             llm_provider,
-            batch,
+            [blocks_by_window[window]],
             metadata,
             min_ratio=min_ratio,
-            repair=False,
-            label=f"校对转写批次 {batch_index}/{total_batches} ({first_window} 到 {last_window})",
+            repair=True,
+            label=f"{label} 修复 {window}",
         )
-        if duplicates:
-            print(f"  警告: 校对批次 {batch_index} 输出重复窗口，已保留首次出现: {', '.join(duplicates)}")
-        if extras:
-            print(f"  警告: 校对批次 {batch_index} 输出额外窗口，已忽略: {', '.join(extras)}")
-        if invalid:
-            print(f"  警告: 校对批次 {batch_index} 输出过短或格式异常，将尝试修复: {', '.join(invalid)}")
-        proofread_by_window.update(collected)
-        invalid_windows.extend(invalid)
-
-    expected_windows = [block["window"] for block in blocks]
-    missing = [window for window in expected_windows if window not in proofread_by_window]
-    repair_windows = list(dict.fromkeys(missing + invalid_windows))
-    if repair_windows:
-        print(f"发现校对缺失/异常窗口 {len(repair_windows)} 个，开始逐窗口修复。")
-        blocks_by_window = {block["window"]: block for block in blocks}
-        for window in repair_windows:
-            block = blocks_by_window[window]
-            collected, duplicates, extras, invalid = generate_proofread_batch(
-                llm_provider,
-                [block],
-                metadata,
-                min_ratio=min_ratio,
-                repair=True,
-                label=f"修复校对窗口 {window}",
-            )
-            if duplicates:
-                print(f"  警告: 修复窗口 {window} 输出重复窗口: {', '.join(duplicates)}")
-            if extras:
-                print(f"  警告: 修复窗口 {window} 输出额外窗口，已忽略: {', '.join(extras)}")
-            if window in collected and window not in invalid:
-                proofread_by_window[window] = collected[window]
+        if repair_duplicates:
+            print(f"  警告: 修复窗口 {window} 输出重复窗口: {', '.join(repair_duplicates)}")
+        if repair_extras:
+            print(f"  警告: 修复窗口 {window} 输出额外窗口，已忽略: {', '.join(repair_extras)}")
+        if window in repaired and window not in repair_invalid:
+            collected[window] = repaired[window]
 
     final_blocks = []
     fallback_windows = []
     for block in blocks:
         window = block["window"]
-        candidate = proofread_by_window.get(window, "")
+        candidate = collected.get(window, "")
         if not proofread_candidate_ok(block["text"], candidate, min_ratio):
             fallback_windows.append(window)
             candidate = block["text"]
@@ -1362,8 +1595,43 @@ def proofread_transcript(llm_provider, transcript, metadata, batch_size=DEFAULT_
 
     if fallback_windows:
         print("警告: 以下窗口校对失败，已保留原始 ASR 文本: " + ", ".join(fallback_windows))
+    return final_blocks
+
+
+def proofread_transcript(
+    llm_provider,
+    transcript,
+    metadata,
+    batch_size=DEFAULT_PROOFREAD_BATCH_SIZE,
+    min_ratio=DEFAULT_PROOFREAD_MIN_RATIO,
+    concurrency=1,
+):
+    blocks = parse_transcript_blocks(transcript)
+    if not blocks:
+        raise RuntimeError("校对需要带 `[HH:MM-HH:MM]` 的 transcript。")
+
+    print(f"检测到 {len(blocks)} 个 transcript 窗口；按每批 {batch_size} 个窗口校对。")
+    batches = list(chunk_list(blocks, batch_size))
+    total_batches = len(batches)
+
+    def proofread_batch(job):
+        batch_index, batch = job
+        first_window = batch[0]["window"]
+        last_window = batch[-1]["window"]
+        return proofread_blocks_with_repair(
+            llm_provider,
+            batch,
+            metadata,
+            min_ratio=min_ratio,
+            label=f"校对转写批次 {batch_index}/{total_batches} ({first_window} 到 {last_window})",
+        )
+
+    jobs = list(enumerate(batches, start=1))
+    batch_results = ordered_parallel_map(proofread_batch, jobs, max_workers=concurrency)
+    final_blocks = [block for batch in batch_results for block in batch]
 
     calibrated = blocks_to_transcript(final_blocks)
+    expected_windows = [block["window"] for block in blocks]
     final_windows = [block["window"] for block in parse_transcript_blocks(calibrated)]
     if final_windows != expected_windows:
         raise RuntimeError("校对后 transcript 窗口校验失败。")
@@ -1398,8 +1666,22 @@ def collect_sections_from_output(output, expected_windows):
     return collected, duplicates, extras
 
 
-def generate_timeline_batch(llm_provider, blocks, metadata, detailed=False, repair=False, label="生成时间章节"):
-    prompt = build_timeline_batch_prompt(blocks, metadata, detailed=detailed, repair=repair)
+def generate_timeline_batch(
+    llm_provider,
+    blocks,
+    metadata,
+    detailed=False,
+    repair=False,
+    label="生成时间章节",
+    inline_proofread=False,
+):
+    prompt = build_timeline_batch_prompt(
+        blocks,
+        metadata,
+        detailed=detailed,
+        repair=repair,
+        inline_proofread=inline_proofread,
+    )
     messages = [
         {"role": "system", "content": llm_system_message("timeline")},
         {"role": "user", "content": prompt},
@@ -1413,7 +1695,14 @@ def generate_timeline_batch(llm_provider, blocks, metadata, detailed=False, repa
     return collect_sections_from_output(output, [block["window"] for block in blocks])
 
 
-def repair_missing_sections(llm_provider, missing_windows, blocks_by_window, metadata, detailed=False):
+def repair_missing_sections(
+    llm_provider,
+    missing_windows,
+    blocks_by_window,
+    metadata,
+    detailed=False,
+    inline_proofread=False,
+):
     repaired = {}
     for window in missing_windows:
         block = blocks_by_window[window]
@@ -1424,6 +1713,7 @@ def repair_missing_sections(llm_provider, missing_windows, blocks_by_window, met
             detailed=detailed,
             repair=True,
             label=f"修复缺失窗口 {window}",
+            inline_proofread=inline_proofread,
         )
         if duplicates:
             print(f"  警告: 修复窗口 {window} 输出重复章节: {', '.join(duplicates)}")
@@ -1434,11 +1724,21 @@ def repair_missing_sections(llm_provider, missing_windows, blocks_by_window, met
     return repaired
 
 
-def generate_timeline_sections(llm_provider, blocks, metadata, batch_size, detailed=False):
+def generate_timeline_sections(
+    llm_provider,
+    blocks,
+    metadata,
+    batch_size,
+    detailed=False,
+    concurrency=1,
+    inline_proofread=False,
+):
     sections_by_window = {}
-    total_batches = math.ceil(len(blocks) / batch_size)
+    batches = list(chunk_list(blocks, batch_size))
+    total_batches = len(batches)
 
-    for batch_index, batch in enumerate(chunk_list(blocks, batch_size), start=1):
+    def generate_batch(job):
+        batch_index, batch = job
         first_window = batch[0]["window"]
         last_window = batch[-1]["window"]
         sections, duplicates, extras = generate_timeline_batch(
@@ -1448,11 +1748,17 @@ def generate_timeline_sections(llm_provider, blocks, metadata, batch_size, detai
             detailed=detailed,
             repair=False,
             label=f"生成时间章节批次 {batch_index}/{total_batches} ({first_window} 到 {last_window})",
+            inline_proofread=inline_proofread,
         )
         if duplicates:
             print(f"  警告: 批次 {batch_index} 输出重复章节，已保留首次出现: {', '.join(duplicates)}")
         if extras:
             print(f"  警告: 批次 {batch_index} 输出额外章节，已忽略: {', '.join(extras)}")
+        return sections
+
+    jobs = list(enumerate(batches, start=1))
+    batch_results = ordered_parallel_map(generate_batch, jobs, max_workers=concurrency)
+    for sections in batch_results:
         sections_by_window.update(sections)
 
     validation = validate_section_map(blocks, sections_by_window)
@@ -1465,6 +1771,7 @@ def generate_timeline_sections(llm_provider, blocks, metadata, batch_size, detai
             blocks_by_window,
             metadata,
             detailed=detailed,
+            inline_proofread=inline_proofread,
         )
         sections_by_window.update(repaired)
 
@@ -1501,18 +1808,17 @@ def generate_core_table(llm_provider, body, blocks, sections_by_window, metadata
     return table
 
 
-def generate_timeline_report(llm_provider, transcript, metadata, batch_size, detailed=False):
-    blocks = parse_transcript_blocks(transcript)
-    if not blocks:
-        raise RuntimeError("timeline 报告需要带 `[HH:MM-HH:MM]` 的 transcript。")
+def build_timeline_report_from_sections(llm_provider, blocks, sections_by_window, metadata):
+    section_validation = validate_section_map(blocks, sections_by_window)
+    if section_validation["missing"]:
+        raise RuntimeError(
+            "报告章节校验失败，仍缺失窗口: "
+            + ", ".join(section_validation["missing"])
+        )
 
-    print(f"检测到 {len(blocks)} 个 transcript 窗口；按每批 {batch_size} 个窗口生成。")
-    body, sections_by_window = generate_timeline_sections(
-        llm_provider,
-        blocks,
-        metadata,
-        batch_size=batch_size,
-        detailed=detailed,
+    body = "\n\n".join(
+        sections_by_window[block["window"]].strip()
+        for block in blocks
     )
     table = generate_core_table(llm_provider, body, blocks, sections_by_window, metadata)
     report = "\n".join([build_report_header(metadata).rstrip(), body.rstrip(), "", table.rstrip(), ""])
@@ -1537,7 +1843,165 @@ def generate_timeline_report(llm_provider, transcript, metadata, batch_size, det
     return report
 
 
-def generate_report(llm_provider, transcript, metadata, report_style="timeline", detailed=False, batch_size=DEFAULT_TIMELINE_BATCH_SIZE):
+def generate_timeline_report(
+    llm_provider,
+    transcript,
+    metadata,
+    batch_size,
+    detailed=False,
+    concurrency=1,
+    inline_proofread=False,
+):
+    blocks = parse_transcript_blocks(transcript)
+    if not blocks:
+        raise RuntimeError("timeline 报告需要带 `[HH:MM-HH:MM]` 的 transcript。")
+
+    print(f"检测到 {len(blocks)} 个 transcript 窗口；按每批 {batch_size} 个窗口生成。")
+    _body, sections_by_window = generate_timeline_sections(
+        llm_provider,
+        blocks,
+        metadata,
+        batch_size=batch_size,
+        detailed=detailed,
+        concurrency=concurrency,
+        inline_proofread=inline_proofread,
+    )
+    return build_timeline_report_from_sections(
+        llm_provider,
+        blocks,
+        sections_by_window,
+        metadata,
+    )
+
+
+def generate_timeline_outputs(
+    llm_provider,
+    transcript,
+    metadata,
+    proofread_mode,
+    proofread_batch_size,
+    proofread_min_ratio,
+    timeline_batch_size,
+    detailed=False,
+    concurrency=1,
+):
+    """Generate timeline outputs using separate pipelined, inline, or skip mode."""
+    if proofread_mode not in {"separate", "inline", "skip"}:
+        raise ValueError(f"不支持的校对模式: {proofread_mode}")
+
+    blocks = parse_transcript_blocks(transcript)
+    if not blocks:
+        raise RuntimeError("timeline 报告需要带 `[HH:MM-HH:MM]` 的 transcript。")
+
+    report_metadata = dict(metadata)
+    if proofread_mode != "separate":
+        if proofread_mode == "inline":
+            report_metadata["transcript_stage"] = "inline_proofread"
+        elif report_metadata.get("transcript_stage") != "calibrated":
+            report_metadata["transcript_stage"] = "raw_asr"
+        report = generate_timeline_report(
+            llm_provider,
+            transcript,
+            report_metadata,
+            batch_size=timeline_batch_size,
+            detailed=detailed,
+            concurrency=concurrency,
+            inline_proofread=(proofread_mode == "inline"),
+        )
+        return None, report
+
+    report_metadata["transcript_stage"] = "calibrated"
+    timeline_batches = list(chunk_list(blocks, timeline_batch_size))
+    total_batches = len(timeline_batches)
+    print(
+        f"检测到 {len(blocks)} 个 transcript 窗口；"
+        f"启动校对→摘要流水线，每批 {timeline_batch_size} 个窗口，并发 {min(concurrency, total_batches)}。"
+    )
+
+    def generate_pipeline_batch(job):
+        batch_index, batch = job
+        calibrated_batch = []
+        proofread_batches = list(chunk_list(batch, proofread_batch_size))
+        for proofread_index, proofread_batch in enumerate(proofread_batches, start=1):
+            calibrated_batch.extend(
+                proofread_blocks_with_repair(
+                    llm_provider,
+                    proofread_batch,
+                    report_metadata,
+                    min_ratio=proofread_min_ratio,
+                    label=(
+                        f"流水线批次 {batch_index}/{total_batches} 校对 "
+                        f"{proofread_index}/{len(proofread_batches)}"
+                    ),
+                )
+            )
+
+        first_window = calibrated_batch[0]["window"]
+        last_window = calibrated_batch[-1]["window"]
+        sections, duplicates, extras = generate_timeline_batch(
+            llm_provider,
+            calibrated_batch,
+            report_metadata,
+            detailed=detailed,
+            repair=False,
+            label=(
+                f"流水线批次 {batch_index}/{total_batches} 生成时间章节 "
+                f"({first_window} 到 {last_window})"
+            ),
+        )
+        if duplicates:
+            print(f"  警告: 流水线批次 {batch_index} 输出重复章节，已保留首次出现: {', '.join(duplicates)}")
+        if extras:
+            print(f"  警告: 流水线批次 {batch_index} 输出额外章节，已忽略: {', '.join(extras)}")
+
+        validation = validate_section_map(calibrated_batch, sections)
+        if validation["missing"]:
+            blocks_by_window = {block["window"]: block for block in calibrated_batch}
+            sections.update(
+                repair_missing_sections(
+                    llm_provider,
+                    validation["missing"],
+                    blocks_by_window,
+                    report_metadata,
+                    detailed=detailed,
+                )
+            )
+        final_validation = validate_section_map(calibrated_batch, sections)
+        if final_validation["missing"]:
+            raise RuntimeError(
+                "报告章节校验失败，仍缺失窗口: "
+                + ", ".join(final_validation["missing"])
+            )
+        return calibrated_batch, sections
+
+    jobs = list(enumerate(timeline_batches, start=1))
+    pipeline_results = ordered_parallel_map(
+        generate_pipeline_batch,
+        jobs,
+        max_workers=concurrency,
+    )
+    calibrated_blocks = []
+    sections_by_window = {}
+    for calibrated_batch, sections in pipeline_results:
+        calibrated_blocks.extend(calibrated_batch)
+        sections_by_window.update(sections)
+
+    expected_windows = [block["window"] for block in blocks]
+    calibrated_windows = [block["window"] for block in calibrated_blocks]
+    if calibrated_windows != expected_windows:
+        raise RuntimeError("校对后 transcript 窗口校验失败。")
+
+    calibrated_transcript = blocks_to_transcript(calibrated_blocks)
+    report = build_timeline_report_from_sections(
+        llm_provider,
+        calibrated_blocks,
+        sections_by_window,
+        report_metadata,
+    )
+    return calibrated_transcript, report
+
+
+def generate_report(llm_provider, transcript, metadata, report_style="timeline", detailed=False, batch_size=DEFAULT_TIMELINE_BATCH_SIZE, concurrency=1):
     if report_style == "brief":
         return generate_brief_report(llm_provider, transcript, metadata, detailed=detailed)
     return generate_timeline_report(
@@ -1546,6 +2010,7 @@ def generate_report(llm_provider, transcript, metadata, report_style="timeline",
         metadata,
         batch_size=batch_size,
         detailed=detailed,
+        concurrency=concurrency,
     )
 
 
@@ -1598,7 +2063,13 @@ def export_ide_prompts(
     for index, batch in enumerate(batches, start=1):
         prompt_name = prompt_filename(index, batch)
         section_name = section_filename(index, batch)
-        prompt_text = build_timeline_batch_prompt(batch, metadata, detailed=detailed, repair=False)
+        prompt_text = build_timeline_batch_prompt(
+            batch,
+            metadata,
+            detailed=detailed,
+            repair=False,
+            inline_proofread=True,
+        )
         full_prompt = (
             "# IDE Timeline Batch Prompt\n\n"
             f"- Batch: {index}/{len(batches)}\n"
@@ -1752,7 +2223,16 @@ def parse_args():
     parser.add_argument(
         "--no-proofread",
         action="store_true",
-        help="跳过 LLM 校对，直接用原始 transcript 生成总结（不推荐）",
+        help="兼容参数，等价于 --proofread-mode skip",
+    )
+    parser.add_argument(
+        "--proofread-mode",
+        choices=["separate", "inline", "skip"],
+        help=(
+            "校对模式：separate=分批校对后立即摘要并保存校对稿；"
+            "inline=在摘要调用内校对且不保存校对稿；skip=跳过校对。"
+            "默认对原始稿使用 separate，对 `_校对`/`_calibrated` 输入使用 skip"
+        ),
     )
     parser.add_argument(
         "--transcript-input",
@@ -1771,15 +2251,15 @@ def parse_args():
         "--manual-sections-dir",
         help="读取 IDE 模型已生成的分批章节 .md 文件，合并并校验成最终 timeline 报告；不调用 LLM API",
     )
-    parser.add_argument(
-        "--bilibili-downloader",
-        choices=["auto", "bbdown", "yt-dlp"],
-        default=os.environ.get("BILIBILI_DOWNLOADER", "auto"),
-        help="B站 URL 下载器：auto 优先 BBDown，失败后回退 yt-dlp；bbdown 强制 BBDown；yt-dlp 强制 yt-dlp（默认: auto）",
-    )
     parser.add_argument("--bbdown-path", default=os.environ.get("BBDOWN_PATH"), help="BBDown 可执行文件路径，也可用 BBDOWN_PATH")
     parser.add_argument("--bbdown-timeout", type=positive_int, default=int_env("BBDOWN_TIMEOUT", 300), help="BBDown 下载超时秒数（默认: 300）")
-    parser.add_argument("--bilibili-cookie", default=os.environ.get("BILIBILI_COOKIE"), help="B站 Cookie 字符串，例如 SESSDATA=...；用于 BBDown -c 或 yt-dlp Cookie header")
+    parser.add_argument(
+        "--bbdown-auto-install",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="缺少 BBDown 时自动下载并校验固定版本 1.6.3（默认开启）",
+    )
+    parser.add_argument("--bilibili-cookie", default=os.environ.get("BILIBILI_COOKIE"), help="B站 Cookie 字符串，例如 SESSDATA=...；通过 BBDown -c 传入")
     parser.add_argument("--bilibili-cookie-file", default=os.environ.get("BILIBILI_COOKIE_FILE"), help="包含一整行 B站 Cookie 字符串的文本文件")
     parser.add_argument("--ytdlp-cookies", default=os.environ.get("YTDLP_COOKIES"), help="yt-dlp Netscape cookies 文件路径")
     parser.add_argument("--ytdlp-cookies-from-browser", default=os.environ.get("YTDLP_COOKIES_FROM_BROWSER"), help="传给 yt-dlp --cookies-from-browser 的浏览器说明，例如 chrome")
@@ -1846,6 +2326,12 @@ def parse_args():
         help=f"校对文本最小长度比例，过短会重试或回退原文（默认: {DEFAULT_PROOFREAD_MIN_RATIO}）",
     )
     parser.add_argument(
+        "--llm-concurrency",
+        type=positive_int,
+        default=int_env("LLM_CONCURRENCY", DEFAULT_LLM_CONCURRENCY),
+        help=f"LLM 批次最大并发数；遇到限流可设为 1（默认: {DEFAULT_LLM_CONCURRENCY}）",
+    )
+    parser.add_argument(
         "--report-style",
         choices=["timeline", "brief"],
         default="timeline",
@@ -1875,32 +2361,16 @@ def resolve_input_audio(args, temp_dir):
     input_path = args.input
     if is_url(input_path):
         bilibili_cookie = resolve_bilibili_cookie(args) if is_bilibili_url(input_path) else None
-        if is_bilibili_url(input_path) and args.bilibili_downloader != "yt-dlp":
-            try:
-                audio_path = download_bilibili_audio(
-                    input_path,
-                    temp_dir,
-                    bbdown_path=args.bbdown_path,
-                    cookie=bilibili_cookie,
-                    timeout=args.bbdown_timeout,
-                )
-                print(f"BBDown 下载完成: {audio_path.name}")
-            except Exception as exc:
-                if args.bilibili_downloader == "bbdown":
-                    raise
-                print(f"警告: BBDown 下载失败，回退 yt-dlp: {exc}")
-                if not check_yt_dlp():
-                    print("错误: 回退 yt-dlp 需要安装: pip install yt-dlp")
-                    sys.exit(1)
-                print(f"下载音频: {input_path}")
-                audio_path = download_audio(
-                    input_path,
-                    temp_dir,
-                    cookie=bilibili_cookie,
-                    cookies_file=args.ytdlp_cookies,
-                    cookies_from_browser=args.ytdlp_cookies_from_browser,
-                )
-                print(f"下载完成: {audio_path.name}")
+        if is_bilibili_url(input_path):
+            audio_path = download_bilibili_audio(
+                input_path,
+                temp_dir,
+                bbdown_path=args.bbdown_path,
+                cookie=bilibili_cookie,
+                timeout=args.bbdown_timeout,
+                auto_install=args.bbdown_auto_install,
+            )
+            print(f"BBDown 下载完成: {audio_path.name}")
         else:
             if not check_yt_dlp():
                 print("错误: 从 URL 下载需要 yt-dlp。请安装: pip install yt-dlp")
@@ -1972,12 +2442,24 @@ def main():
     if args.transcribe_only and args.proofread_only:
         print("错误: --transcribe-only 和 --proofread-only 不能同时使用。")
         sys.exit(2)
-    if args.no_proofread and args.proofread_only:
-        print("错误: --no-proofread 和 --proofread-only 不能同时使用。")
+    if args.no_proofread and args.proofread_mode not in (None, "skip"):
+        print("错误: --no-proofread 只能与 --proofread-mode skip 同时使用。")
+        sys.exit(2)
+    if args.proofread_only and (args.no_proofread or args.proofread_mode in ("inline", "skip")):
+        print("错误: --proofread-only 需要 separate 校对模式。")
         sys.exit(2)
     if args.proofread_only and (args.export_ide_prompts or args.manual_sections_dir):
         print("错误: --proofread-only 不能与 --export-ide-prompts 或 --manual-sections-dir 同时使用。")
         sys.exit(2)
+    if args.proofread_mode == "inline" and args.report_style != "timeline":
+        print("错误: --proofread-mode inline 只支持 --report-style timeline。")
+        sys.exit(2)
+
+    proofread_mode = select_proofread_mode(
+        "separate" if args.proofread_only else args.proofread_mode,
+        args.no_proofread,
+        args.transcript_input,
+    )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2014,7 +2496,11 @@ def main():
                 print(f"转写文本已保存: {transcript_path}")
 
         metadata = build_metadata(args, base_name, duration_seconds)
-        llm_provider = None
+        input_is_calibrated = bool(
+            args.transcript_input
+            and Path(args.transcript_input).stem.endswith(("_校对", "_calibrated"))
+        )
+        metadata["transcript_stage"] = "calibrated" if input_is_calibrated else "raw_asr"
 
         if args.transcribe_only:
             print("\n=== 完成 ===")
@@ -2024,12 +2510,10 @@ def main():
             print(f"窗口数: {count_transcript_windows(transcript)}")
             return
 
-        should_api_proofread = (
-            not args.no_proofread
-            and not args.export_ide_prompts
-            and not args.manual_sections_dir
-        )
-        if should_api_proofread:
+        if input_is_calibrated and args.proofread_mode is None and not args.no_proofread:
+            print("检测到已校对 transcript，自动跳过重复校对；可用 --proofread-mode separate 强制重跑。")
+
+        if args.proofread_only:
             if transcript_path is None:
                 transcript_path = output_dir / f"{base_name}_转写.txt"
                 transcript_path.write_text(transcript, encoding="utf-8")
@@ -2043,19 +2527,13 @@ def main():
                 metadata,
                 batch_size=args.proofread_batch_size,
                 min_ratio=args.proofread_min_ratio,
+                concurrency=args.llm_concurrency,
             )
             metadata["transcript_stage"] = "calibrated"
             calibrated_path = output_dir / f"{base_name}_校对.txt"
             calibrated_path.write_text(transcript, encoding="utf-8")
             transcript_path = calibrated_path
             print(f"校对文本已保存: {calibrated_path}")
-        else:
-            if args.transcript_input and Path(args.transcript_input).stem.endswith(("_校对", "_calibrated")):
-                metadata["transcript_stage"] = "calibrated"
-            else:
-                metadata["transcript_stage"] = "raw_asr"
-
-        if args.proofread_only:
             print("\n=== 完成 ===")
             print("已完成 LLM 校对，跳过总结报告。")
             print(f"校对文本: {transcript_path}")
@@ -2084,16 +2562,59 @@ def main():
             report = generate_manual_report(transcript, metadata, args.manual_sections_dir)
         else:
             print("\n=== LLM 总结 ===")
-            if llm_provider is None:
-                llm_provider = create_llm_provider(args)
-            report = generate_report(
-                llm_provider,
-                transcript,
-                metadata,
-                report_style=args.report_style,
-                detailed=args.detailed,
-                batch_size=args.timeline_batch_size,
-            )
+            llm_provider = create_llm_provider(args)
+            if args.report_style == "timeline":
+                if proofread_mode == "separate" and transcript_path is None:
+                    transcript_path = output_dir / f"{base_name}_转写.txt"
+                    transcript_path.write_text(transcript, encoding="utf-8")
+                    print(f"原始转写文本已保存: {transcript_path}")
+
+                calibrated, report = generate_timeline_outputs(
+                    llm_provider,
+                    transcript,
+                    metadata,
+                    proofread_mode=proofread_mode,
+                    proofread_batch_size=args.proofread_batch_size,
+                    proofread_min_ratio=args.proofread_min_ratio,
+                    timeline_batch_size=args.timeline_batch_size,
+                    detailed=args.detailed,
+                    concurrency=args.llm_concurrency,
+                )
+                if calibrated is not None:
+                    transcript = calibrated
+                    metadata["transcript_stage"] = "calibrated"
+                    calibrated_path = output_dir / f"{base_name}_校对.txt"
+                    calibrated_path.write_text(transcript, encoding="utf-8")
+                    transcript_path = calibrated_path
+                    print(f"校对文本已保存: {calibrated_path}")
+            else:
+                if proofread_mode == "separate":
+                    if transcript_path is None:
+                        transcript_path = output_dir / f"{base_name}_转写.txt"
+                        transcript_path.write_text(transcript, encoding="utf-8")
+                        print(f"原始转写文本已保存: {transcript_path}")
+                    transcript = proofread_transcript(
+                        llm_provider,
+                        transcript,
+                        metadata,
+                        batch_size=args.proofread_batch_size,
+                        min_ratio=args.proofread_min_ratio,
+                        concurrency=args.llm_concurrency,
+                    )
+                    metadata["transcript_stage"] = "calibrated"
+                    calibrated_path = output_dir / f"{base_name}_校对.txt"
+                    calibrated_path.write_text(transcript, encoding="utf-8")
+                    transcript_path = calibrated_path
+                    print(f"校对文本已保存: {calibrated_path}")
+                report = generate_report(
+                    llm_provider,
+                    transcript,
+                    metadata,
+                    report_style=args.report_style,
+                    detailed=args.detailed,
+                    batch_size=args.timeline_batch_size,
+                    concurrency=args.llm_concurrency,
+                )
 
         report_suffix = "逐窗口深度解读" if args.report_style == "timeline" else "报告"
         if args.detailed and args.report_style != "timeline":

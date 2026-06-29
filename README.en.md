@@ -47,7 +47,8 @@ The default report style is a strict timeline report:
 
 - Local audio: `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.aac`
 - Local video: `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.flv`
-- URLs supported by `yt-dlp`, such as many podcast pages, YouTube links, and Bilibili links when access is available
+- Bilibili URLs, exclusively through BBDown with pinned version 1.6.3 downloaded and verified on first use
+- Other URLs supported by `yt-dlp`, including Xiaoyuzhou podcast pages and YouTube links
 - Existing transcripts with `[HH:MM-HH:MM]` windows
 
 ## Proofreading And Summary Modes
@@ -66,6 +67,8 @@ Proofreading/summary modes:
 - `ide-agent`: use the current IDE/Agent model to proofread ASR first, then summarize; the script merges and validates. This is the recommended default.
 - `api-llm`: use an API LLM provider such as MiMo, Kimi, Zhipu, Alibaba, Tencent, MiniMax, or an OpenAI-compatible endpoint to proofread and summarize automatically.
 - `manual`: export prompts and let the user paste model outputs manually for proofreading and summary.
+
+API LLM mode now pipelines proofreading -> immediate summary per batch with bounded concurrency of 2. Use `--proofread-mode inline` when only the final report is needed; calibrated inputs skip duplicate proofreading automatically. Set `--llm-concurrency 1` for strict provider rate limits.
 
 ## Installation
 
@@ -200,21 +203,15 @@ python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual
 
 ## URL And Cookie Notes
 
-URL input is handled through `yt-dlp`.
+Bilibili URLs always use BBDown and never fall back to `yt-dlp`. On first use the script downloads and verifies pinned version 1.6.3; use `--bbdown-path` or `BBDOWN_PATH` for an existing executable. Xiaoyuzhou, YouTube, and other ordinary URLs continue to use `yt-dlp`.
 
-Public podcast URLs often work directly. Bilibili and YouTube links may require cookies or browser login state depending on the video, region, age restriction, membership status, or anti-bot checks.
-
-For login-required videos:
+For Bilibili content requiring login state:
 
 ```bash
-yt-dlp --cookies-from-browser chrome "https://www.bilibili.com/video/BV..."
+python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-xxxx" --bilibili-cookie "SESSDATA=..."
 ```
 
-or:
-
-```bash
-yt-dlp --cookies cookies.txt "https://www.bilibili.com/video/BV..."
-```
+Pass `--no-bbdown-auto-install` to disable automatic installation; a BBDown path is then required.
 
 Cookies are sensitive credentials. Do not print them, store them in reports, or commit them.
 

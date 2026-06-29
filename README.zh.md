@@ -47,7 +47,8 @@ mimo-token-plan-asr-llm-pipeline/
 
 - 本地音频：`.mp3`、`.wav`、`.m4a`、`.flac`、`.ogg`、`.aac`
 - 本地视频：`.mp4`、`.mkv`、`.avi`、`.mov`、`.webm`、`.flv`
-- `yt-dlp` 支持的 URL，例如很多播客页面、YouTube 链接、可访问的 B 站链接
+- Bilibili/B站 URL：固定使用 BBDown，首次运行自动下载并校验 1.6.3
+- `yt-dlp` 支持的其它 URL，例如小宇宙播客页面和 YouTube 链接
 - 已有的带 `[HH:MM-HH:MM]` 时间窗口的 transcript
 
 ## 校对和总结方式
@@ -66,6 +67,8 @@ Agent 在任务开始时应该一个问题一个问题地询问：
 - `ide-agent`：用当前 IDE/Agent 模型先校对 ASR，再总结；最后用脚本合并和校验。默认推荐这个。
 - `api-llm`：用 MiMo、Kimi、智谱、阿里、腾讯、MiniMax 或 OpenAI-compatible API 自动校对和总结。
 - `manual`：只导出 prompts，用户自己复制到其它模型里完成校对和总结。
+
+API LLM 默认按批次执行“校对后立即摘要”，最多 2 路并发。只需要最终报告时可用 `--proofread-mode inline` 合并两阶段；已有 `_校对.txt` 会自动跳过重复校对。遇到 provider 限流时使用 `--llm-concurrency 1`。
 
 ## 安装方式
 
@@ -200,21 +203,15 @@ python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual
 
 ## URL 和 Cookie 说明
 
-URL 输入通过 `yt-dlp` 处理。
+B站链接固定使用 BBDown，失败时不会回退 `yt-dlp`。首次运行会从官方 Release 下载并校验固定版本 1.6.3；也可以通过 `--bbdown-path` 或 `BBDOWN_PATH` 使用已有可执行文件。小宇宙、YouTube 和其它普通 URL 仍由 `yt-dlp` 处理。
 
-公开播客链接通常可以直接处理。B 站和 YouTube 链接可能因为视频权限、地区限制、年龄限制、会员状态或反爬检查而需要 cookies 或浏览器登录态。
-
-需要登录态的视频可以尝试：
+B站需要登录态时传入网页 cookie：
 
 ```bash
-yt-dlp --cookies-from-browser chrome "https://www.bilibili.com/video/BV..."
+python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-xxxx" --bilibili-cookie "SESSDATA=..."
 ```
 
-或者：
-
-```bash
-yt-dlp --cookies cookies.txt "https://www.bilibili.com/video/BV..."
-```
+使用 `--no-bbdown-auto-install` 可关闭自动安装；关闭后必须配置 BBDown 路径。
 
 Cookies 是敏感凭证。不要打印、写进报告或提交到仓库。
 

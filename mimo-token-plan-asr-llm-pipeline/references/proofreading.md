@@ -66,19 +66,25 @@ Agent 不要直接基于明显脏的 ASR 原文总结。
 
 ### `api-llm`
 
-脚本默认自动校对：
+脚本默认使用 `--proofread-mode separate`：每个 timeline 批次完成校对后立即进入摘要，并保存校对稿；独立批次默认最多 2 路并发。
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --llm-provider kimi --llm-api-key "sk-..."
 ```
 
-它会先保存：
+它会保存：
 
 ```text
 {base_name}_校对.txt
 ```
 
-再基于校对稿生成报告。
+如果只需要最终报告，可以把校对合并到摘要调用中，不生成独立校对稿：
+
+```bash
+python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --proofread-mode inline --llm-provider kimi --llm-api-key "sk-..."
+```
+
+若 provider 出现 429 或限流，使用 `--llm-concurrency 1`；默认并发数是 2。
 
 只生成校对稿：
 
@@ -86,11 +92,13 @@ python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --llm-prov
 python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --proofread-only --llm-provider kimi --llm-api-key "sk-..."
 ```
 
-只有当 transcript 已经人工校正或来自可靠字幕时，才使用：
+输入文件名以 `_校对.txt` 或 `_calibrated.txt` 结尾时，脚本会自动复用并跳过重复校对。只有 transcript 已经人工校正或来自可靠字幕时，才对其它文件使用：
 
 ```bash
 --no-proofread
 ```
+
+`--no-proofread` 等价于 `--proofread-mode skip`。显式传入 `--proofread-mode separate` 可以强制重新校对已有校对稿。
 
 ### `manual`
 
