@@ -66,7 +66,7 @@ The agent should not summarize obviously dirty ASR text directly.
 
 ### `api-llm`
 
-The script proofreads automatically:
+The script defaults to `--proofread-mode separate`: each timeline batch is summarized immediately after proofreading, the calibrated transcript is saved, and up to two independent batches run concurrently.
 
 ```bash
 python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --llm-provider kimi --llm-api-key "sk-..."
@@ -78,7 +78,13 @@ It saves:
 {base_name}_校对.txt
 ```
 
-Then it generates the report from that calibrated transcript.
+When only the final report is needed, combine proofreading with each summary call and omit the separate calibrated transcript:
+
+```bash
+python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --proofread-mode inline --llm-provider kimi --llm-api-key "sk-..."
+```
+
+If the provider returns 429/rate-limit errors, use `--llm-concurrency 1`; the default concurrency is 2.
 
 Proofread only:
 
@@ -86,7 +92,7 @@ Proofread only:
 python scripts/mimo_podcast_tool.py --transcript-input raw_转写.txt --proofread-only --llm-provider kimi --llm-api-key "sk-..."
 ```
 
-Use `--no-proofread` only when the transcript was already manually corrected or comes from high-quality subtitles.
+Inputs ending in `_校对.txt` or `_calibrated.txt` automatically reuse the calibrated text and skip duplicate proofreading. Use `--no-proofread` for other files only when the transcript was already manually corrected or comes from high-quality subtitles. It is an alias for `--proofread-mode skip`; pass `--proofread-mode separate` to force recalibration.
 
 ### `manual`
 

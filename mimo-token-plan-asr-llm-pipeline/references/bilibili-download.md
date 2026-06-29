@@ -1,83 +1,87 @@
-# Bilibili URL 下载实现记录
+# Bilibili / BBDown 路由参考
 
-本文记录对 `zj1123581321/VideoTranscriptAPI` 的 B 站下载实现分析，并说明本 skill 的改造策略。
+修改 B站 URL 识别、BBDown 查找或自动安装、cookie 传递、下载失败处理时读取本文。B站路径没有下载器选择项，也不允许回退到 `yt-dlp`。
 
-## 参考仓库版本
+## 域名分类
 
-- `zj1123581321/VideoTranscriptAPI`: `8f05ab2`
-- 重点文件：`src/video_transcript_api/downloaders/bilibili.py`
-- 相关配置：`config/config.example.jsonc` 的 `bbdown` 段
-- 相关文档：`docs/development/bilibili_metadata_enhancement.md`、`docs/guides/api/bbdown_guide.md`
+`is_bilibili_url()` 必须使用 `urllib.parse.urlparse()` 解析 hostname，并只接受：
 
-## VideoTranscriptAPI 的处理链路
+- `bilibili.com` 及其任意子域名；
+- `b23.tv` 及其任意子域名。
 
-1. 下载器工厂 `create_downloader(url)` 会在 URL 命中 `bilibili.com` 或 `b23.tv` 时返回 `BilibiliDownloader`。
-2. `BilibiliDownloader.can_handle()` 只做域名判断；`_extract_video_id()` 负责从长链接提取 BV 号，短链会先通过 `resolve_short_url()` 跟随跳转。
-3. 元数据阶段调用 B 站官方接口：
-   `https://api.bilibili.com/x/web-interface/view?bvid=<BV>`
-   请求头伪装浏览器，并设置 `Referer`。
-4. 官方元数据接口的 cookie 策略：
-   - 如果 `config.bbdown.bilibili_cookie` 非空，放入请求头 `Cookie`。
-   - 否则生成随机 `buvid3=<UUID>infoc`，降低完全无 cookie 时的 `-412/-799/-509` 风控概率。
-   - 对网络异常和这些 body code 做最多 3 次指数退避重试。
-5. 下载阶段按 `config.bbdown.use_bbdown` 分支：
-   - `true`：调用本地 BBDown 可执行文件下载，默认 `--audio-only`。
-   - `false`：调用 TikHub API 获取 `cid` 和 `dash.audio[0].baseUrl`，再用通用下载器请求这个音频 URL。
-6. BBDown 模式下，`get_download_info()` 会实际下载音频到临时目录，然后返回 `DownloadInfo(local_file=..., downloaded=True)`。主流程看到 `downloaded=True` 后直接把本地文件交给转录器。
-7. 主流程会跳过 B 站平台字幕，因为 `get_subtitle()` 固定返回 `None`，所以 B 站始终走“下载音视频 -> ASR 转写”。
+host 比较前应转为小写并去掉末尾的点。不要用字符串包含判断，否则 `evil-bilibili.com`、URL path 或查询参数中的 `bilibili.com` 会被误判。小宇宙和其他 HTTP/HTTPS URL 走 `yt-dlp`。
 
-## 关键设计点
+## 下载合同
 
-- 元数据和下载必须解耦。VideoTranscriptAPI 曾经在元数据阶段触发 BBDown 下载，BBDown 超时会连带导致标题/作者丢失；当前修复是在 BBDown 模式下元数据阶段只调用官方 API。
-- 对 B 站不能只依赖裸 `yt-dlp`。公开视频可能可用，但受限内容、登录可见内容或服务器 IP 风控经常需要 cookie。
-- BBDown 是 B 站专用路径，命令行支持：
-  - `--audio-only`：只下载音频，适合 ASR。
-  - `-p <page>`：选择分 P。
-  - `-c "<cookie>"` / `--cookie "<cookie>"`：传入网页 cookie。
-  - `-F downloaded`：固定输出文件名，便于脚本找到下载产物。
-
-## 注意：上游实现的 cookie 差异
-
-VideoTranscriptAPI 的 `bilibili_cookie` 当前用于官方元数据 API；在所分析版本中，它没有被追加到 BBDown 命令。BBDown 自身支持 `-c/--cookie`，所以本 skill 改造时直接把 `--bilibili-cookie` / `BILIBILI_COOKIE` 接到 BBDown `-c`，并在 `yt-dlp` fallback 中用 `--add-headers Cookie:<cookie>`。
-
-## 本 skill 的实现策略
-
-脚本 `scripts/mimo_podcast_tool.py` 对 B 站 URL 使用以下策略：
-
-1. `is_bilibili_url()` 判断 `bilibili.com` / `b23.tv`。
-2. `--bilibili-downloader auto` 默认优先 BBDown。
-3. BBDown 命令形态：
-   ```bash
-   BBDown "https://www.bilibili.com/video/BV..." --audio-only -F downloaded -c "SESSDATA=..."
-   ```
-4. 如果 `auto` 模式下 BBDown 不存在或失败，回退到 `yt-dlp -x --audio-format mp3`。
-5. 如果用户指定 `--bilibili-downloader bbdown`，BBDown 失败就直接报错，不静默回退。
-6. cookie 来源：
-   - `--bilibili-cookie "SESSDATA=..."`
-   - `--bilibili-cookie-file cookie.txt`
-   - 环境变量 `BILIBILI_COOKIE`
-7. BBDown 可执行文件来源：
-   - `--bbdown-path`
-   - 环境变量 `BBDOWN_PATH`
-   - PATH 中的 `BBDown`
-   - 当前目录或 skill 根目录下的 `BBDown/BBDown(.exe)`
-
-## 推荐用户提示
-
-当用户给 B 站链接且下载失败时，优先让用户提供 B 站网页 cookie 字符串，至少包含 `SESSDATA`。不要要求用户把账号密码交给脚本。
-
-示例：
+B站 URL 只执行 BBDown：
 
 ```bash
-python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." \
-  --transcribe-only \
-  --api-key "tp-xxxx" \
-  --bilibili-cookie "SESSDATA=...; bili_jct=...; DedeUserID=..."
+BBDown "https://www.bilibili.com/video/BV..." --audio-only -F downloaded -c "SESSDATA=..."
 ```
 
-如果不想把 cookie 放进命令历史：
+- `--audio-only`：仅下载供 ASR 使用的音频。
+- `-F downloaded`：固定输出基名，便于确定性查找产物。
+- `-c`：仅在 cookie 非空时追加。
+- BBDown 下载、校验或执行失败时直接返回明确错误；不得调用 `yt-dlp` 重试。
 
-```bash
+不存在 `--bilibili-downloader` 参数，也不读取 `BILIBILI_DOWNLOADER`。旧参数必须由 argparse 拒绝，避免调用方误以为 B站仍可切换下载器。
+
+## Cookie
+
+按以下来源传给 BBDown `-c`：
+
+1. `--bilibili-cookie`；
+2. `--bilibili-cookie-file`；
+3. `BILIBILI_COOKIE`。
+
+需要登录态或遇到风控时，让用户提供浏览器 cookie 字符串，通常至少包含 `SESSDATA`。不得要求账号密码，也不得把 cookie 写入报告、日志或仓库。
+
+PowerShell 中可避免把 cookie 留在命令历史：
+
+```powershell
 $env:BILIBILI_COOKIE = "SESSDATA=...; bili_jct=...; DedeUserID=..."
 python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-xxxx"
 ```
+
+## BBDown 查找顺序
+
+使用第一个有效的可执行文件：
+
+1. `--bbdown-path`；
+2. `BBDOWN_PATH`；
+3. PATH 中的 `BBDown`；
+4. 当前目录或 skill 本地目录中的 `BBDown/BBDown(.exe)`；
+5. 用户缓存中的已校验 1.6.3；
+6. 默认开启的固定版本自动安装。
+
+显式配置的路径无效时应直接报配置错误，不要静默改用另一个二进制。`--no-bbdown-auto-install` 禁用自动安装；此时所有来源都缺失必须返回可操作的错误。
+
+## 固定版本自动安装
+
+只从官方 GitHub Release `nilaoda/BBDown` 的 `1.6.3` 标签下载，不查询 `latest`。下载上限为 32 MiB，边下载边计算 SHA-256，哈希通过后才允许解压。
+
+| 平台 | Release 资产 | SHA-256 |
+|---|---|---|
+| Windows x64 | `BBDown_1.6.3_20240814_win-x64.zip` | `40f1e2af0d4e74df765c6f93d2e931f9bea201d5168d0bc62dc35a54b7e0ec02` |
+| Windows ARM64 | `BBDown_1.6.3_20240814_win-arm64.zip` | `da8fc9cbf1031f4c4ca97af82d98bbfd1bbc55bd8ea49602da8d3d1613c190ff` |
+| Linux x64 | `BBDown_1.6.3_20240814_linux-x64.zip` | `ec233b7d8d40b1cc4447dac05be343f53a757dc605743a8808abaa8e97e5d10e` |
+| Linux ARM64 | `BBDown_1.6.3_20240814_linux-arm64.zip` | `f58e0a18df1a589375428a0af27ea61f5ce96ffaf67d115f335d5f9bee9a34dc` |
+| macOS x64 | `BBDown_1.6.3_20240814_osx-x64.zip` | `262c15ca7890898560d00e5ffd5ada1864fbd9d0d58ac4ee492c9f3e73f3ae5f` |
+| macOS ARM64 | `BBDown_1.6.3_20240814_osx-arm64.zip` | `4df84014d818bd6dff2b365b847645340e8955c4450fe965688f41af89a38baa` |
+
+安全约束：
+
+- ZIP 中只接受根目录的 `BBDown.exe` 或 `BBDown`；拒绝目录穿越、嵌套路径和多余候选文件。
+- 在同一缓存目录创建临时文件，验证完成后原子替换目标。
+- 下载中断、哈希不符、ZIP 损坏或缺少可执行文件时清理临时文件。
+- Unix 二进制权限设置为 `0755`。
+- 缓存命中时复用已安装文件；校验不通过则删除并重新安装或报错。
+
+## 验证场景
+
+- `www.bilibili.com`、子域名、`b23.tv` 命中 B站；小宇宙、YouTube、`evil-bilibili.com` 和查询参数伪装不命中。
+- B站下载始终调用 BBDown；BBDown 缺失或失败时 mock 的 `yt-dlp` 调用次数保持为零。
+- 非B站 URL 仍调用 `yt-dlp`。
+- `--bilibili-downloader` 被 CLI 拒绝。
+- 六个平台映射、缓存复用、哈希失败、损坏 ZIP、缺少可执行文件、下载中断和临时文件清理均有测试。
+- cookie 按优先级传入 BBDown，且命令中没有空的 `-c`。
