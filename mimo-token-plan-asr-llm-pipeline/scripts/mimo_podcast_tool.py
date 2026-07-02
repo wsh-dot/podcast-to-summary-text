@@ -765,7 +765,7 @@ class StepFunSSEASRProvider(BaseASRProvider):
         deltas = []
         done_text = ""
         seen_done = False
-        with self.opener(request, self.timeout) as response:
+        with self.opener(request, timeout=self.timeout) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8").strip()
                 if not line.startswith("data:"):

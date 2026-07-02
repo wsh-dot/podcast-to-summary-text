@@ -56,7 +56,7 @@ class StepFunSSEProviderTests(unittest.TestCase):
             },
         ]
 
-        def opener(request, timeout):
+        def opener(request, *, timeout):
             requests.append((request, timeout))
             return FakeSSEResponse(events)
 
@@ -102,7 +102,7 @@ class StepFunSSEProviderTests(unittest.TestCase):
             api_key="step-secret",
             base_url="https://api.stepfun.com/step_plan/v1",
             model="stepaudio-2.5-asr",
-            opener=lambda _request, _timeout: FakeSSEResponse(events),
+            opener=lambda _request, *, timeout: FakeSSEResponse(events),
         )
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "chunk.mp3"
@@ -123,7 +123,7 @@ class StepFunSSEProviderTests(unittest.TestCase):
             api_key="step-secret",
             base_url="https://api.stepfun.com/v1",
             model="stepaudio-2.5-asr",
-            opener=lambda _request, _timeout: FakeSSEResponse(events),
+            opener=lambda _request, *, timeout: FakeSSEResponse(events),
         )
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "chunk.mp3"
@@ -139,7 +139,7 @@ class StepFunSSEProviderTests(unittest.TestCase):
             api_key="step-secret",
             base_url="https://api.stepfun.com/v1",
             model="stepaudio-2.5-asr",
-            opener=lambda _request, _timeout: FakeSSEResponse(events),
+            opener=lambda _request, *, timeout: FakeSSEResponse(events),
         )
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "chunk.mp3"
