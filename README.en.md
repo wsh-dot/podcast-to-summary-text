@@ -161,6 +161,7 @@ Choose one ASR source:
 |---|---|
 | MiMo ASR | `--api-key`, `--asr-api-key`, or `MIMO_API_KEY` |
 | Alibaba Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` |
+| StepFun ASR | `--asr-provider stepfun --asr-api-key`, `STEPFUN_API_KEY`, or `STEP_API_KEY`; add `--stepfun-plan` for Step Plan credits |
 | Tencent ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key` |
 | Existing transcript | No ASR API credential; use `--transcript-input` |
 
@@ -187,6 +188,15 @@ Alibaba Qwen ASR, then IDE/Agent proofreading and summary:
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
+
+StepFun StepAudio 2.5 ASR using Step Plan subscription credits:
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider stepfun --stepfun-plan --asr-api-key "..."
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
+```
+
+Without `--stepfun-plan`, the standard platform `/v1` path is used. The script never falls back between the two billing paths.
 
 Existing transcript, then API LLM proofreading and summary:
 

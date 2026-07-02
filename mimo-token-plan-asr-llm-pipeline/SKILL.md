@@ -1,6 +1,6 @@
 ---
 name: mimo-token-plan-asr-llm-pipeline
-description: 将本地音频/视频、Bilibili/B站、小宇宙等 URL 或已有带时间窗口 transcript 转为经校对的逐窗口时间线播客摘要。支持 MiMo Token Plan、阿里 Qwen、腾讯 ASR，以及 IDE/Agent、MiMo、Kimi、智谱、阿里、腾讯、MiniMax 等总结方式；B站固定使用 BBDown 1.6.3，其他 URL 使用 yt-dlp。Use for podcast/video transcription, ASR proofreading, timeline notes, Bilibili downloads, MiMo `tp-` credentials, `[HH:MM-HH:MM]` transcripts, or when the user asks for 播客总结、视频转写、B站总结、小宇宙笔记、带时间点摘要。
+description: 将本地音频/视频、Bilibili/B站、小宇宙等 URL 或已有带时间窗口 transcript 转为经校对的逐窗口时间线播客摘要。支持 MiMo Token Plan、阿里 Qwen、阶跃星辰 StepAudio 2.5（普通 API / Step Plan）和腾讯 ASR，以及 IDE/Agent 或多种 LLM API 总结；B站固定使用 BBDown 1.6.3，其他 URL 使用 yt-dlp。Use for podcast/video transcription, StepFun/StepAudio ASR, Step Plan speech API, ASR proofreading, timeline notes, Bilibili downloads, MiMo `tp-` credentials, `[HH:MM-HH:MM]` transcripts, or 播客总结、视频转写、B站总结、小宇宙笔记、带时间点摘要。
 ---
 
 # 时间线播客转写与摘要
@@ -22,7 +22,7 @@ description: 将本地音频/视频、Bilibili/B站、小宇宙等 URL 或已有
 
 每轮最多询问一个选择：
 
-1. **ASR 来源**：MiMo ASR、阿里 Qwen ASR、腾讯 ASR、已有 transcript。媒体或 URL 输入必须同时取得相应凭据；已有 transcript 直接记为已确定。
+1. **ASR 来源**：MiMo ASR、阿里 Qwen ASR、阶跃星辰普通 API、阶跃星辰 Step Plan、腾讯 ASR、已有 transcript。媒体或 URL 输入必须同时取得相应凭据；已有 transcript 直接记为已确定。选择阶跃星辰时必须明确普通计费还是 Step Plan 订阅额度。
 2. **总结方式**：当前 IDE/Agent 模型（推荐）、指定 LLM API、仅导出 prompts。只有收到或推断出第一个答案后才能询问第二个。
 
 用户未回答总结方式时使用 `ide-agent`。MiMo `--api-key` 默认只代表 ASR 授权，不代表用户同意调用 MiMo LLM。凭据只通过 CLI 参数或环境变量传给脚本，不写入报告、日志示例或仓库文件。
@@ -37,6 +37,13 @@ description: 将本地音频/视频、Bilibili/B站、小宇宙等 URL 或已有
 | 带 `[HH:MM-HH:MM]` 窗口的 `.txt` | 使用 `--transcript-input`，跳过下载和 ASR。`*_校对.txt` / `*_calibrated.txt` 默认跳过重复校对。 |
 
 B站判断必须基于 `urllib.parse.urlparse()` 得到的真实 hostname。不得用字符串包含判断；`evil-bilibili.com` 或仅在查询参数出现 `bilibili.com` 的 URL 不是 B站。
+
+阶跃星辰使用 `--asr-provider stepfun`。普通开放平台走默认 `/v1`；只有用户明确使用 Step Plan 订阅时才加 `--stepfun-plan`，走 `/step_plan/v1`：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only \
+  --asr-provider stepfun --stepfun-plan --asr-api-key "..."
+```
 
 ## 总结路由
 
@@ -80,6 +87,7 @@ python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual
 ## 不可破坏的约束
 
 - MiMo Token Plan ASR 必须调用 `https://token-plan-sgp.xiaomimimo.com/v1/chat/completions`，并把 base64 音频放入 `input_audio`；`tp-` key 用在标准 MiMo 域名或 `/audio/transcriptions` 会分别导致 401/404。
+- 阶跃星辰 Step Plan ASR 必须调用 `https://api.stepfun.com/step_plan/v1/audio/asr/sse`；普通开放平台使用 `/v1/audio/asr/sse`。两条路径计费归属不同，不得自动互相回退。模型固定默认 `stepaudio-2.5-asr`，并从 `transcript.text.done.text` 读取最终文本；`error` 事件必须失败退出。
 - 长媒体必须先分片；整段 base64 请求容易超限，并会失去可靠时间窗口。
 - B站只能调用 BBDown。BBDown 下载、校验或执行失败时直接报错；回退到 `yt-dlp` 会违反路由和登录态约束。
 - 校对必须保持全部 `[HH:MM-HH:MM]` 标签、顺序和实质内容；不得跨窗口移动、合并、删除或新增内容。校对结果不合格时保留该窗口原文。
@@ -97,6 +105,7 @@ python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual
 | 触发条件 | 读取 |
 |---|---|
 | MiMo endpoint、payload、认证、401/404/413/429 | `references/api-reference.md` 或 `references/api-reference.en.md` |
+| 阶跃星辰、StepAudio、Step Plan、SSE 事件或 `/audio/asr/sse` | `references/stepfun-asr.md` 或 `references/stepfun-asr.en.md` |
 | B站域名判断、BBDown 安装/校验、cookie、故障 | `references/bilibili-download.md` |
 | provider 切换、模型/base URL、凭据变量 | `references/providers.md` 或 `references/providers.en.md` |
 | 校对 prompt、术语、质量下降、是否可跳过校对 | `references/proofreading.md` 或 `references/proofreading.en.md` |

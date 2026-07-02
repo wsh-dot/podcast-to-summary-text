@@ -161,6 +161,7 @@ pip install tencentcloud-sdk-python
 |---|---|
 | MiMo ASR | `--api-key`、`--asr-api-key` 或 `MIMO_API_KEY` |
 | 阿里 Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` |
+| 阶跃星辰 ASR | `--asr-provider stepfun --asr-api-key`、`STEPFUN_API_KEY` 或 `STEP_API_KEY`；Step Plan 订阅加 `--stepfun-plan` |
 | 腾讯 ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key` |
 | 已有 transcript | 不需要 ASR API，使用 `--transcript-input` |
 
@@ -187,6 +188,15 @@ python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-xxxx"
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
+
+阶跃星辰 StepAudio 2.5 ASR，使用 Step Plan 订阅额度：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider stepfun --stepfun-plan --asr-api-key "..."
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
+```
+
+不加 `--stepfun-plan` 时使用普通开放平台 `/v1` 路径；脚本不会在两条计费路径之间自动回退。
 
 已有 transcript，然后用 API LLM 自动校对和总结：
 

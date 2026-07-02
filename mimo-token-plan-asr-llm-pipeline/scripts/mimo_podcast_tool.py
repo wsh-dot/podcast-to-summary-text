@@ -39,6 +39,8 @@ from urllib.request import Request, urlopen
 DEFAULT_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1"
 DEFAULT_ASR_MODEL = "mimo-v2.5-asr"
 DEFAULT_LLM_MODEL = "mimo-v2.5-pro"
+STEPFUN_BASE_URL = "https://api.stepfun.com/v1"
+STEPFUN_PLAN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
 
 ASR_PROVIDER_DEFAULTS = {
     "mimo": {
@@ -50,6 +52,12 @@ ASR_PROVIDER_DEFAULTS = {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen3-asr-flash",
         "api_envs": ("DASHSCOPE_API_KEY", "ALIYUN_API_KEY"),
+    },
+    "stepfun": {
+        "base_url": STEPFUN_BASE_URL,
+        "plan_base_url": STEPFUN_PLAN_BASE_URL,
+        "model": "stepaudio-2.5-asr",
+        "api_envs": ("STEPFUN_API_KEY", "STEP_API_KEY"),
     },
     "tencent": {
         "engine_model_type": "16k_zh",
@@ -705,6 +713,81 @@ class AliyunQwenASRProvider(BaseASRProvider):
         return response.choices[0].message.content or ""
 
 
+class StepFunSSEASRProvider(BaseASRProvider):
+    """StepFun HTTP + SSE adapter for standard and Step Plan ASR paths."""
+
+    name = "stepfun"
+
+    def __init__(
+        self,
+        api_key,
+        base_url,
+        model,
+        language=None,
+        timeout=120,
+        opener=urlopen,
+    ):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.language = language
+        self.timeout = timeout
+        self.opener = opener
+
+    def transcribe_chunk(self, chunk_path):
+        audio_b64 = base64.b64encode(Path(chunk_path).read_bytes()).decode("ascii")
+        transcription = {
+            "model": self.model,
+            "enable_itn": True,
+        }
+        if self.language:
+            transcription["language"] = self.language
+        payload = {
+            "audio": {
+                "data": audio_b64,
+                "input": {
+                    "transcription": transcription,
+                    "format": {"type": "mp3"},
+                },
+            }
+        }
+        request = Request(
+            f"{self.base_url}/audio/asr/sse",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            method="POST",
+        )
+
+        deltas = []
+        done_text = ""
+        seen_done = False
+        with self.opener(request, self.timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                event = json.loads(data)
+                event_type = event.get("type")
+                if event_type == "transcript.text.delta":
+                    deltas.append(event.get("delta") or "")
+                elif event_type == "transcript.text.done":
+                    seen_done = True
+                    done_text = event.get("text") or ""
+                elif event_type == "error":
+                    raise RuntimeError(event.get("message") or "StepFun ASR 返回未知错误")
+
+        if not seen_done:
+            raise RuntimeError("StepFun ASR SSE 在 transcript.text.done 事件前结束")
+        return done_text or "".join(deltas)
+
+
 class TencentRecordingASRProvider(BaseASRProvider):
     name = "tencent"
 
@@ -870,6 +953,21 @@ def create_asr_provider(args):
         model = args.asr_model or provider_default(ASR_PROVIDER_DEFAULTS, provider, "model")
         return AliyunQwenASRProvider(api_key=api_key, base_url=base_url, model=model)
 
+    if provider == "stepfun":
+        api_key = require_value(
+            args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider),
+            "阶跃星辰 ASR 需要 --asr-api-key、STEPFUN_API_KEY 或 STEP_API_KEY。",
+        )
+        defaults = ASR_PROVIDER_DEFAULTS[provider]
+        default_base_url = defaults["plan_base_url"] if args.stepfun_plan else defaults["base_url"]
+        return StepFunSSEASRProvider(
+            api_key=api_key,
+            base_url=args.asr_base_url or default_base_url,
+            model=args.asr_model or defaults["model"],
+            language=args.stepfun_language,
+            timeout=args.stepfun_timeout,
+        )
+
     if provider == "tencent":
         secret_id = require_value(
             args.tencent_secret_id or provider_env(ASR_PROVIDER_DEFAULTS, provider, "secret_id_envs"),
@@ -940,6 +1038,11 @@ def validate_provider_defaults():
         for key in ("base_url", "model", "api_envs"):
             if not values.get(key):
                 raise AssertionError(f"ASR provider {provider} missing {key}")
+
+    stepfun = ASR_PROVIDER_DEFAULTS["stepfun"]
+    for key in ("base_url", "plan_base_url", "model", "api_envs"):
+        if not stepfun.get(key):
+            raise AssertionError(f"ASR provider stepfun missing {key}")
 
     tencent = ASR_PROVIDER_DEFAULTS["tencent"]
     for key in ("engine_model_type", "region", "secret_id_envs", "secret_key_envs"):
@@ -2190,6 +2293,9 @@ def parse_args():
   # 阿里 Qwen ASR 转写，后续由当前 IDE/Agent 模型总结
   python mimo_podcast_tool.py podcast.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-..."
 
+  # 阶跃星辰 Step Plan ASR 转写（订阅额度使用专属 /step_plan/v1 路径）
+  python mimo_podcast_tool.py podcast.mp3 --transcribe-only --asr-provider stepfun --stepfun-plan --asr-api-key "..."
+
   # B站 URL：优先用 BBDown 下载音频；受限内容可提供 B站 cookie
   python mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --transcribe-only --api-key "tp-..." --bilibili-cookie "SESSDATA=..."
 
@@ -2275,15 +2381,30 @@ def parse_args():
     )
     parser.add_argument(
         "--asr-provider",
-        choices=["mimo", "aliyun-qwen", "tencent"],
+        choices=["mimo", "aliyun-qwen", "stepfun", "tencent"],
         default="mimo",
-        help="ASR provider（默认: mimo；可选 aliyun-qwen、tencent）",
+        help="ASR provider（默认: mimo；可选 aliyun-qwen、stepfun、tencent）",
     )
     parser.add_argument("--asr-api-key", default=os.environ.get("ASR_API_KEY"), help="ASR provider API Key")
     parser.add_argument("--asr-base-url", default=os.environ.get("ASR_BASE_URL"), help="ASR provider Base URL")
     parser.add_argument(
         "--asr-model",
         help="ASR 模型或腾讯 EngineModelType；未提供时按 provider 默认值",
+    )
+    parser.add_argument(
+        "--stepfun-plan",
+        action="store_true",
+        help="阶跃星辰 ASR 使用 Step Plan 专属 /step_plan/v1 路径；未指定时使用普通 /v1 路径",
+    )
+    parser.add_argument(
+        "--stepfun-language",
+        help="阶跃星辰 ASR language，例如 zh；未提供时交由模型自动识别",
+    )
+    parser.add_argument(
+        "--stepfun-timeout",
+        type=positive_int,
+        default=int_env("STEPFUN_ASR_TIMEOUT", 120),
+        help="阶跃星辰 SSE ASR 单片请求超时秒数（默认: 120）",
     )
     parser.add_argument("--tencent-secret-id", default=os.environ.get("TENCENTCLOUD_SECRET_ID"), help="腾讯云 SecretId")
     parser.add_argument("--tencent-secret-key", default=os.environ.get("TENCENTCLOUD_SECRET_KEY"), help="腾讯云 SecretKey")
