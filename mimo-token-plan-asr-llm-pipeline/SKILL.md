@@ -1,11 +1,11 @@
 ---
 name: mimo-token-plan-asr-llm-pipeline
-description: 将本地音频/视频、Bilibili/B站、小宇宙、YouTube 等 URL 或已有 `[HH:MM-HH:MM]` transcript 转为经校对的逐窗口 Markdown 时间线和完全离线 HTML 图文速览，支持真实视频代表帧、证据校验及 IDE/Agent、manual、API LLM 三条总结路线。Use when asked for 播客总结、视频解析/转写、B站总结、小宇宙笔记、带时间点摘要、离线图文报告，或 MiMo Token Plan、阿里 Qwen、StepFun/StepAudio 2.5（普通 API / Step Plan）、腾讯 ASR；B站下载固定使用 BBDown 1.6.3，其他 URL 使用 yt-dlp。
+description: Use when a user needs 播客或长音视频转写、校对、总结或图文解读，输入来自本地媒体、Bilibili/B站、小宇宙、YouTube、URL 或已有 `[HH:MM-HH:MM]` transcript；也适用于 ASR、MiMo Token Plan、Qwen、StepFun/StepAudio、腾讯 ASR、逐窗口深度解读、带时间点摘要或完全离线 HTML 图文速览请求。
 ---
 
 # 时间线转写、摘要与离线图文速览
 
-使用 `scripts/mimo_podcast_tool.py`。把 Markdown 视为事实主产物；HTML 是在校对稿和已验证 Markdown 之后生成的可降级增强产物。
+使用 `scripts/mimo_podcast_tool.py`。核心判断是“证据先于表现”：校对稿与已验证 Markdown 是事实主产物，HTML 只能在它们发布后生成，且视觉失败不得反向破坏事实产物。
 
 ```text
 媒体 -> 窗口化 ASR -> 逐窗口校对 -> 已验证 Markdown
@@ -14,12 +14,13 @@ description: 将本地音频/视频、Bilibili/B站、小宇宙、YouTube 等 UR
 
 ## 决策门
 
-在执行下载或外部 API 前依次确定两件事。用户已提供的信息直接采用，不重复询问。
+在执行下载或外部 API 前依次确定三件事。用户已提供的信息直接采用，不重复询问。
 
 1. **ASR 来源**：MiMo、阿里 Qwen、StepFun 普通 API、Step Plan、腾讯，或已有 transcript。
-2. **总结路线**：`ide-agent`（默认）、`api-llm`，或 `manual`。
+2. **时间线路线**：`ide-agent`（默认）、`api-llm`，或合并已有 `manual sections`。
+3. **视觉路线**：不生成视觉、`api-llm` 自动生成，或 `manual` JSON 三阶段。
 
-每轮最多询问一个选择。StepFun 必须明确普通计费还是 Step Plan；两者不得自动互相回退。用户只提供 ASR key 时不得推断其同意 LLM API，总结路线使用 `ide-agent`。
+每轮最多询问一个选择。用户只要求转写或 Markdown 时跳过视觉决策。StepFun 必须明确普通计费还是 Step Plan；两者不得自动互相回退。用户只提供 ASR key 时不得推断其同意 LLM API，时间线路线使用 `ide-agent`。
 
 ## 输入路由
 
@@ -122,6 +123,7 @@ python scripts/mimo_podcast_tool.py input.mp3 \
 - **绝不让 B站回退到 yt-dlp**：这会破坏固定下载器、登录态和可重复性合同。
 - **绝不改变窗口标签、顺序或内容归属**：校对失败时保留该窗口原文，不跨窗口搬运句子。
 - **绝不发布缺失、重复、额外或乱序的 timeline 章节**：只修复缺失窗口，最终仍不完整则停止 Markdown。
+- **绝不伪造“关键论据 / 金句”**：金句必须逐字存在于对应校对窗口，不得跨窗口拼接；不得使用统一占位文案。只有无有效语音的窗口才标注“无可用原话”。
 - **绝不接受模型 HTML、CSS、JavaScript、SVG 或路径**：模型只产生 JSON；固定 renderer 负责转义、路径和离线资产。
 - **绝不把帧当作机械配额**：只为高优先级章节从真实所属窗口提取，黑暗/空/损坏帧直接跳过。
 - **绝不因 visual 阶段失败删除 Markdown 或校对稿**：警告必须指明保留的 Markdown；不得打印密钥或 transcript 内容。
@@ -159,8 +161,10 @@ python scripts/mimo_podcast_tool.py input.mp3 \
 ```bash
 python -m unittest discover -s tests -v
 python scripts/mimo_podcast_tool.py --self-test
-python -m py_compile scripts/*.py
+python -m compileall -q scripts
 python scripts/mimo_podcast_tool.py --help
 ```
+
+在 Windows 中文环境运行外部 skill 校验器时显式启用 UTF-8，例如 PowerShell 使用 `$env:PYTHONUTF8=1`；Linux/macOS 使用 `PYTHONUTF8=1 python ...`。
 
 交付前逐项核对：transcript 与报告窗口一一对应；Markdown 已先落盘；HTML/assets 同名且可移动；帧来自所属窗口；页面在 375/768/1024/1440px 无横向溢出；控制台无相关错误；网络禁用时无外部资源请求。
