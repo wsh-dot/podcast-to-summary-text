@@ -1666,8 +1666,100 @@ def section_first_claim(section):
         line = line.strip()
         if not line or line.startswith(">") or line.startswith("#"):
             continue
-        return line.replace("|", " ")[:80]
+        claim = line.replace("|", " ")
+        return claim if len(claim) <= 80 else claim[:79].rstrip() + "…"
     return "该窗口内容较少或转写质量有限。"
+
+
+CORE_QUOTE_CUES = (
+    "我觉得",
+    "最重要",
+    "关键",
+    "真正",
+    "本质",
+    "不是",
+    "而是",
+    "意味着",
+    "应该",
+    "不能",
+    "因为",
+    "所以",
+)
+TRANSCRIPT_PLACEHOLDER_MARKERS = (
+    "未返回可用转写",
+    "无可用转写",
+    "没有有效语音",
+    "转写失败",
+)
+CORE_QUOTE_MAX_LENGTH = 120
+
+
+def source_sentences(text):
+    return [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[。！？!?；;，,])\s*|\n+", text or "")
+        if sentence.strip()
+    ]
+
+
+def relevance_terms(text):
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", text or ""))
+    terms = {chinese[index:index + 2] for index in range(max(0, len(chinese) - 1))}
+    terms.update(
+        token.lower()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9._+-]{2,}", text or "")
+    )
+    return terms
+
+
+def bounded_source_passages(text, max_length=CORE_QUOTE_MAX_LENGTH):
+    passages = []
+    stride = max_length // 2
+    for sentence in source_sentences(text):
+        if len(sentence) > max_length:
+            for chunk_start in range(0, len(sentence), stride):
+                passage = sentence[chunk_start:chunk_start + max_length]
+                if len(passage) >= 8:
+                    passages.append(passage)
+                if chunk_start + max_length >= len(sentence):
+                    break
+            continue
+        passages.append(sentence)
+    return passages
+
+
+def select_core_quote(block_text, section):
+    block_text = (block_text or "").strip()
+    if len(block_text) < CORE_QUOTE_MAX_LENGTH and any(
+        marker in block_text for marker in TRANSCRIPT_PLACEHOLDER_MARKERS
+    ):
+        return ""
+
+    candidates = [
+        passage
+        for passage in bounded_source_passages(block_text)
+        if len(passage) >= 8 and "|" not in passage
+    ]
+    if not candidates:
+        return ""
+
+    context_terms = relevance_terms(
+        f"{section_title(section)} {section_first_claim(section)}"
+    )
+
+    def score(sentence):
+        sentence_terms = relevance_terms(sentence)
+        overlap = len(context_terms.intersection(sentence_terms))
+        cue_score = sum(1 for cue in CORE_QUOTE_CUES if cue in sentence)
+        question_penalty = 8 if sentence.endswith(("？", "?")) else 0
+        return (
+            overlap * 8
+            + cue_score * 6
+            - question_penalty
+            - len(sentence) * 0.8
+        )
+
+    return max(candidates, key=score)
 
 
 def fallback_core_table(blocks, sections_by_window):
@@ -1680,8 +1772,10 @@ def fallback_core_table(blocks, sections_by_window):
     for block in blocks:
         window = block["window"]
         section = sections_by_window.get(window, "")
+        quote = select_core_quote(block.get("text", ""), section)
+        evidence = f"“{quote}”" if quote else "无可用原话（该窗口无有效转写）"
         rows.append(
-            f"| {window} | {section_title(section)} | {section_first_claim(section)} | 依据该时间窗口转写整理 |"
+            f"| {window} | {section_title(section)} | {section_first_claim(section)} | {evidence} |"
         )
     return "\n".join(rows)
 
