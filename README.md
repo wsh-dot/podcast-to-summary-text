@@ -18,13 +18,13 @@
 
 ## 实际效果
 
-下面是使用本仓库 skill 解析姚舜宇近四小时访谈的真实结果：
+下面是使用本仓库 skill 解析姚舜宇近四小时访谈的完整真实产物。HTML 图文解读是最终的可视化效果，校对转写稿和逐窗口深度解读也一并保留：
 
-[在线打开完整图文解读](https://wsh-dot.github.io/podcast-to-summary-text/) · [查看自包含 HTML](docs/index.html) · [原始 Bilibili 视频](https://www.bilibili.com/video/BV1YR5E6EE9o)
+[校对转写稿](examples/yao-shunyu-interview/calibrated-transcript.txt) · [逐窗口深度解读](examples/yao-shunyu-interview/window-by-window-analysis.md) · [在线 HTML 图文解读](https://wsh-dot.github.io/podcast-to-summary-text/) · [仓库内 HTML](docs/index.html) · [原始 Bilibili 视频](https://www.bilibili.com/video/BV1YR5E6EE9o)
 
 ![姚舜宇访谈图文解读预览](docs/assets/yao-shunyu-interview-preview.webp)
 
-该案例读取并校对了 3 小时 48 分钟内容的 77 个转写窗口，最终压缩为约 5–7 分钟可读的 5 个主题、4 条核心洞见和 8 张 CSS/SVG 信息图。公开页面不附完整转写稿，也不使用原视频画面。
+该案例先将 3 小时 48 分钟内容整理为 77 个完整校对窗口，再生成覆盖全部窗口的逐窗口深度解读，最后在完整读取校对稿和深度解读后，压缩为约 5–7 分钟可读的 HTML 全局解读。HTML 包含 5 个主题、4 条核心洞见和 8 张 CSS/SVG 信息图，不使用原视频画面。
 
 ## 最推荐的安装方式
 
