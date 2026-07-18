@@ -16,6 +16,16 @@
 - 转写说明
 - 方便快速浏览的“核心观点速览”表格
 
+## 实际效果
+
+下面是使用本仓库 skill 解析姚舜宇近四小时访谈的真实结果：
+
+[在线打开完整图文解读](https://wsh-dot.github.io/podcast-to-summary-text/) · [查看自包含 HTML](docs/index.html) · [原始 Bilibili 视频](https://www.bilibili.com/video/BV1YR5E6EE9o)
+
+![姚舜宇访谈图文解读预览](docs/assets/yao-shunyu-interview-preview.webp)
+
+该案例读取并校对了 3 小时 48 分钟内容的 77 个转写窗口，最终压缩为约 5–7 分钟可读的 5 个主题、4 条核心洞见和 8 张 CSS/SVG 信息图。公开页面不附完整转写稿，也不使用原视频画面。
+
 ## 最推荐的安装方式
 
 如果你的 AI 编程软件支持从 GitHub 安装 skill，请优先粘贴这个 **skill 子目录链接**：
