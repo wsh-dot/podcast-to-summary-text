@@ -85,3 +85,14 @@ python scripts/mimo_podcast_tool.py "https://www.bilibili.com/video/BV..." --tra
 - `--bilibili-downloader` 被 CLI 拒绝。
 - 六个平台映射、缓存复用、哈希失败、损坏 ZIP、缺少可执行文件、下载中断和临时文件清理均有测试。
 - cookie 按优先级传入 BBDown，且命令中没有空的 `-c`。
+
+## Markdown 后置视觉源
+
+权威音频下载与 best-effort 视觉下载是两个阶段，但共享同一所有权边界：
+
+- 音频在 ASR 前使用 `--audio-only`，失败时主链停止。
+- 视觉只在校对 transcript、timeline 校验和 Markdown 写入都成功后开始。
+- 视觉使用同一个 BBDown 1.6.3、cookie、路径解析、超时和自动安装配置，参数为 `--video-only --video-ascending`。
+- 视觉失败只输出一条 warning，继续生成无帧 infographic/text HTML。
+- **绝不把视觉失败回退到 yt-dlp**；否则会让登录态、固定版本和路由审计失真。
+- 下载的视频只存在本次临时目录，帧复制到最终 sibling assets 后清理临时媒体。

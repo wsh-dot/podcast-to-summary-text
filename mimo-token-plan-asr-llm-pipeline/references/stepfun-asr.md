@@ -54,6 +54,13 @@
 - 连接未出现 `transcript.text.done` 就结束：视为截断并重试，禁止交付累计 delta。
 - 空行、`event:` 行和 `[DONE]` 哨兵可忽略。
 
+## 限流、内容拦截与恢复
+
+- HTTP 429 最多尝试 8 次；优先采用合法的 `Retry-After`，否则按 15、30、60、120 秒上限退避。429 和普通瞬时错误共用总尝试预算，避免交错错误绕过上限。
+- `risk blocked` 先在原分片上快速重试；持续拦截时，把该 3 分钟窗口临时拆成最多三个 1 分钟子片段。只合并同一原窗口内的结果，输出标签仍为原 3 分钟窗口。
+- 每完成一个窗口，就原子更新 `<输出名>_转写.asr-checkpoint.json`。恢复前校验输入标识、`segment_minutes`、媒体时长和已完成的连续窗口前缀；最终转写原子发布后才删除 checkpoint。
+- checkpoint 不保存凭据。不要通过改 checkpoint 绕过不匹配校验，也不要把 Step Plan 与普通 API 当作限流回退路径。
+
 ## 相关官方文档
 
 - [StepAudio 2.5 ASR 模型](https://platform.stepfun.com/docs/zh/guides/models/stepaudio-2.5-asr)
@@ -65,6 +72,7 @@
 
 ```bash
 python -m unittest tests.test_stepfun_asr -v
+python -m unittest tests.test_asr_resilience -v
 python scripts/mimo_podcast_tool.py --self-test
 python scripts/mimo_podcast_tool.py --help
 ```
