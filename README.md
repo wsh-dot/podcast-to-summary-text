@@ -12,7 +12,7 @@
 - ASR 凭据在第一次真实转写成功后保存到本机用户配置，后续新对话自动复用。
 - 缓存凭据只有在 401/403 或明确认证失败时才会删除并重新索取；429、网络错误和服务端错误不会误删。
 - 支持按 provider 独立保存 MiMo、阿里 Qwen、阶跃星辰和腾讯 ASR 凭据。
-- 已通过 36 个单元测试、脚本自检，以及 skill-judge `116/120（A）` 和 SkillOpt held-out `6/6` 验证。
+- 已通过 101 个单元测试、脚本自检，以及 skill-judge `116/120（A）` 和 SkillOpt held-out `6/6` 验证。
 
 它适合长音频和长视频内容。最终报告会包含：
 
@@ -22,6 +22,16 @@
 - 只基于转写文本的关键引用
 - 转写说明
 - 方便快速浏览的“核心观点速览”表格
+
+## 实际效果
+
+下面是使用本仓库 skill 解析姚舜宇近四小时访谈的完整真实产物。HTML 图文解读是最终的可视化效果，校对转写稿和逐窗口深度解读也一并保留：
+
+[校对转写稿](examples/yao-shunyu-interview/calibrated-transcript.txt) · [逐窗口深度解读](examples/yao-shunyu-interview/window-by-window-analysis.md) · [在线 HTML 图文解读](https://wsh-dot.github.io/podcast-to-summary-text/) · [仓库内 HTML](docs/index.html) · [原始 Bilibili 视频](https://www.bilibili.com/video/BV1YR5E6EE9o)
+
+![姚舜宇访谈图文解读预览](docs/assets/yao-shunyu-interview-preview.webp)
+
+该案例先将 3 小时 48 分钟内容整理为 77 个完整校对窗口，再生成覆盖全部窗口的逐窗口深度解读，最后在完整读取校对稿和深度解读后，压缩为约 5–7 分钟可读的 HTML 全局解读。HTML 包含 5 个主题、4 条核心洞见和 8 张 CSS/SVG 信息图，不使用原视频画面。
 
 ## 最推荐的安装方式
 

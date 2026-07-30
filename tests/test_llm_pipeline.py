@@ -141,6 +141,157 @@ class ModeSelectionTests(unittest.TestCase):
         )
 
 
+class CoreTableTests(unittest.TestCase):
+    def test_section_first_claim_marks_truncation_with_ellipsis(self):
+        section = (
+            "## 00:00-00:03 测试主题\n\n"
+            + "这是一段用于验证核心观点截断行为的完整说明，" * 10
+        )
+
+        claim = tool.section_first_claim(section)
+
+        self.assertLessEqual(len(claim), 80)
+        self.assertTrue(claim.endswith("…"))
+
+    def test_fallback_table_uses_exact_window_quote_instead_of_placeholder(self):
+        transcript = (
+            "[00:00-00:03]\n"
+            "开场先介绍了嘉宾。这个行业最重要的特质就是靠谱。随后继续讨论组织。\n\n"
+            "[00:03-00:06]\n"
+        )
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": (
+                "## 00:00-00:03 靠谱比聪明更重要\n\n"
+                "嘉宾强调，AI 行业最重要的特质是靠谱，并且要对结果负责。"
+            ),
+            "00:03-00:06": "## 00:03-00:06 无可用转写\n\n该窗口没有有效语音。",
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertNotIn("依据该时间窗口转写整理", table)
+        self.assertIn("“这个行业最重要的特质就是靠谱。”", table)
+        self.assertIn("无可用原话", table)
+        self.assertIn("这个行业最重要的特质就是靠谱。", blocks[0]["text"])
+
+    def test_fallback_table_selects_a_concise_exact_clause(self):
+        transcript = (
+            "[00:00-00:03]\n"
+            "先回顾一段很长的行业背景和多家公司发展过程，"
+            "真正关键是找到尚未被定义好的问题，"
+            "后面又补充了产品发布与用户增长的案例。"
+        )
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": (
+                "## 00:00-00:03 定义真正的问题\n\n"
+                "模型竞争的关键是找到尚未被定义好的问题。"
+            )
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertIn("“真正关键是找到尚未被定义好的问题，”", table)
+        self.assertNotIn("“先回顾一段很长", table)
+
+    def test_fallback_table_rejects_transcription_placeholders(self):
+        transcript = "[00:00-00:03]\n（此窗口未返回可用转写文本。"
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": "## 00:00-00:03 无可用转写\n\n该窗口没有有效语音。"
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertIn("无可用原话", table)
+        self.assertNotIn("“（此窗口未返回可用转写文本。”", table)
+
+    def test_fallback_table_caps_unpunctuated_quote_as_exact_source_span(self):
+        source = (
+            "背景信息" * 40
+            + "真正关键是把简单的事情做干净"
+            + "后续补充" * 40
+        )
+        transcript = f"[00:00-00:03]\n{source}"
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": (
+                "## 00:00-00:03 把简单的事情做干净\n\n"
+                "真正关键是把简单的事情做干净。"
+            )
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+        quote = re.search(r"“([^”]+)”", table).group(1)
+
+        self.assertLessEqual(len(quote), 120)
+        self.assertIn("真正关键是把简单的事情做干净", quote)
+        self.assertIn(quote, source)
+
+    def test_fallback_table_prefers_topic_evidence_over_short_preamble(self):
+        transcript = (
+            "[00:00-00:03]\n"
+            "我觉得这个从技术上来说，"
+            "就是你用有限的这个context lens去训练它，"
+            "但是可以在使用的时候用非常非常长，甚至接近于无限的context lens。"
+        )
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": (
+                "## 00:00-00:03 有限训练上下文与近乎无限使用上下文\n\n"
+                "嘉宾提出重要技术目标：用有限 context 训练，却让模型在使用时完成接近无限 context 的长程工作。"
+            )
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertIn("“就是你用有限的这个context lens去训练它，”", table)
+        self.assertNotIn("“我觉得这个从技术上来说，”", table)
+
+    def test_fallback_table_ignores_off_topic_complete_judgment(self):
+        transcript = (
+            "[00:00-00:03]\n"
+            "我觉得它虽然不难，但是知道和不知道还是有差距，"
+            "我觉得纯做语言模型已经不是一个蓝海了。"
+        )
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": (
+                "## 00:00-00:03 语言模型不再是蓝海\n\n"
+                "纯语言模型赛道已经拥挤，不再是年轻人的蓝海。"
+            )
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertIn("“我觉得纯做语言模型已经不是一个蓝海了。”", table)
+        self.assertNotIn("“我觉得它虽然不难", table)
+
+    def test_fallback_table_ignores_short_filler_fragments(self):
+        self.assertEqual(
+            "",
+            tool.select_core_quote(
+                "我觉得，",
+                "## 00:00-00:03 简短窗口\n\n该窗口只有口头填充。",
+            ),
+        )
+
+        transcript = (
+            "[00:00-00:03]\n"
+            "我觉得，后面继续补充了一段更完整的具体说明。"
+        )
+        blocks = tool.parse_transcript_blocks(transcript)
+        sections = {
+            "00:00-00:03": "## 00:00-00:03 完整说明\n\n嘉宾继续给出具体说明。"
+        }
+
+        table = tool.fallback_core_table(blocks, sections)
+
+        self.assertNotIn("“我觉得，”", table)
+        self.assertIn("“后面继续补充了一段更完整的具体说明。”", table)
+
+
 class ConcurrencyTests(unittest.TestCase):
     def test_ordered_parallel_map_is_bounded_and_preserves_input_order(self):
         lock = threading.Lock()

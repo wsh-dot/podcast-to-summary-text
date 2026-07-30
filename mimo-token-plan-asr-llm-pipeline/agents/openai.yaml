@@ -1,0 +1,4 @@
+interface:
+  display_name: "Podcast & Video Timeline Brief"
+  short_description: "Evidence-verified timelines and offline visual briefs"
+  default_prompt: "Use $mimo-token-plan-asr-llm-pipeline to turn this podcast or video into a calibrated transcript, a verified window-by-window analysis with exact-source quotes, and an offline HTML visual brief."

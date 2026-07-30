@@ -43,6 +43,23 @@ mimo-token-plan-asr-llm-pipeline/
 | 时间 | 章节 | 核心观点 | 关键论据 / 金句 |
 ```
 
+## 实际效果
+
+该案例来自一次真实运行：使用本仓库 skill 解析姚舜宇的近四小时 Bilibili 访谈。仓库同时保留校对转写稿、逐窗口深度解读和最终 HTML 图文效果。
+
+[查看校对转写稿](examples/yao-shunyu-interview/calibrated-transcript.txt) · [查看逐窗口深度解读](examples/yao-shunyu-interview/window-by-window-analysis.md) · [在线打开 HTML 图文解读](https://wsh-dot.github.io/podcast-to-summary-text/) · [查看仓库中的单文件 HTML](docs/index.html) · [查看原始视频](https://www.bilibili.com/video/BV1YR5E6EE9o)
+
+![姚舜宇访谈图文解读预览](docs/assets/yao-shunyu-interview-preview.webp)
+
+处理结果：
+
+- 原视频时长 3 小时 48 分钟，校对转写稿完整保留 77 个时间窗口
+- 逐窗口深度解读覆盖全部 77 个窗口，是可核查的 Markdown 事实主产物
+- 完整读取校对稿和逐窗口深度解读后，再压缩为约 5–7 分钟可读的 HTML 全局解读
+- 页面包含 5 个主题、4 条核心洞见和 8 张 renderer-owned CSS/SVG 信息图
+- HTML 完全自包含，不依赖外部脚本或图片资源
+- HTML 页面不嵌入完整转写稿，也不截取原视频画面；完整校对稿与深度解读通过仓库文件单独提供
+
 ## 支持的输入
 
 - 本地音频：`.mp3`、`.wav`、`.m4a`、`.flac`、`.ogg`、`.aac`
@@ -261,6 +278,6 @@ python scripts/mimo_podcast_tool.py --help
 
 当前发布还通过了：
 
-- `python -m unittest discover -s tests -v`：36 个测试
+- `python -m unittest discover -s tests -v`：101 个测试
 - skill-judge：`116/120（A）`
 - SkillOpt held-out gate：`hard=1.0000`、`soft=1.0000`（6/6）

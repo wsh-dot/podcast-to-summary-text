@@ -10,6 +10,7 @@ Default behavior:
   4. Pipeline proofreading -> summary per batch, proofread inline, or reuse calibrated input.
   5. Generate batches with bounded LLM concurrency, or export IDE prompts for manual summary.
   6. Validate that every transcript window has exactly one report section.
+  7. For API-driven timeline runs, attempt an offline visual brief after Markdown publication.
 """
 
 import argparse
@@ -28,8 +29,26 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+_added_scripts_path = _SCRIPTS_DIR not in sys.path
+if _added_scripts_path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+try:
+    from visual_generation import generate_api_visual_brief
+    from visual_manual import (
+        export_visual_prompts,
+        prepare_visual_synthesis,
+        render_manual_visual_brief,
+    )
+    from visual_frames import extract_representative_frames
+    from visual_reader import VisualStageError, render_visual_brief
+finally:
+    if _added_scripts_path:
+        sys.path.remove(_SCRIPTS_DIR)
 
 
 # ============================================================
@@ -163,6 +182,14 @@ LLM_MAX_TOKENS_FINAL_TABLE = 4096
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2
+ASR_RATE_LIMIT_RETRIES = 8
+ASR_RATE_LIMIT_BASE_DELAY = 15
+ASR_RATE_LIMIT_MAX_DELAY = 120
+ASR_CHECKPOINT_VERSION = 1
+
+
+class ASRContentBlockedError(RuntimeError):
+    pass
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv"}
@@ -320,6 +347,8 @@ def get_audio_duration(audio_path):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         print(f"警告: 无法获取音频时长: {result.stderr}")
@@ -530,6 +559,8 @@ def chunk_audio(audio_path, temp_dir, segment_minutes=DEFAULT_SEGMENT_MINUTES):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     if result.returncode != 0:
@@ -542,6 +573,8 @@ def chunk_audio(audio_path, temp_dir, segment_minutes=DEFAULT_SEGMENT_MINUTES):
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg 分片失败: {result.stderr}")
@@ -631,6 +664,76 @@ def download_bilibili_audio(
     if not downloaded:
         raise FileNotFoundError("BBDown 下载完成但未找到音视频文件")
     return max(downloaded, key=lambda path: path.stat().st_mtime)
+
+
+def download_bilibili_video(
+    url,
+    output_dir,
+    bbdown_path=None,
+    cookie=None,
+    timeout=300,
+    auto_install=True,
+):
+    executable = resolve_bbdown_path(bbdown_path, auto_install=auto_install)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        executable,
+        url,
+        "--video-only",
+        "--video-ascending",
+        "-F",
+        "visual",
+    ]
+    if cookie:
+        command.extend(["-c", cookie])
+    result = subprocess.run(
+        command,
+        cwd=output_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        details = "\n".join(part for part in (result.stderr, result.stdout) if part)
+        raise RuntimeError(f"BBDown visual download failed: {details}")
+    downloaded = [
+        path for path in output_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    if not downloaded:
+        raise FileNotFoundError("BBDown visual download produced no video file")
+    return max(downloaded, key=lambda path: path.stat().st_mtime)
+
+
+def download_remote_video(url, output_dir, cookies_file=None, cookies_from_browser=None):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "yt-dlp",
+        "--no-playlist",
+        "-f",
+        "bestvideo[height<=720]/best[height<=720]",
+        "-o",
+        str(output_dir / "visual.%(ext)s"),
+    ]
+    if cookies_file:
+        command.extend(["--cookies", str(cookies_file)])
+    if cookies_from_browser:
+        command.extend(["--cookies-from-browser", str(cookies_from_browser)])
+    command.append(url)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp visual download failed: {result.stderr}")
+    downloaded = [
+        path for path in output_dir.glob("visual.*")
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    if not downloaded:
+        raise FileNotFoundError("yt-dlp visual download produced no video file")
+    return downloaded[0]
 
 
 # ============================================================
@@ -1364,14 +1467,104 @@ def run_self_test():
         assert manual_validation["found_count"] == 3, manual_validation
         assert manual_validation["has_core_table"], manual_validation
 
+        calibrated_blocks = parse_transcript_blocks(calibrated)
+        visual_windows = [block["window"] for block in calibrated_blocks]
+        visual_manifest = {
+            "version": 1,
+            "overview": {
+                "text": "<unsafe> self-test overview",
+                "source_windows": visual_windows,
+            },
+            "core_insights": [{
+                "text": "Every visual claim remains evidence-linked.",
+                "source_windows": visual_windows,
+            }],
+            "chapters": [
+                {
+                    "id": "selftest",
+                    "title": {"text": "Self-test chapter", "source_windows": visual_windows},
+                    "summary": {
+                        "text": "All calibrated windows remain available.",
+                        "source_windows": visual_windows,
+                    },
+                    "source_windows": visual_windows,
+                    "evidence": [
+                        {"window": block["window"], "label": "Calibrated evidence"}
+                        for block in calibrated_blocks
+                    ],
+                    "visuals": [],
+                    "frame_priority": 100,
+                }
+            ],
+        }
+        audio_result = render_visual_brief(
+            calibrated_transcript_blocks=calibrated_blocks,
+            validated_timeline_report=report,
+            trusted_metadata={"title": "Self-test audio", "duration_seconds": 420},
+            media_source={"kind": "audio", "url": None},
+            manifest=visual_manifest,
+            output_destination=tmp_path / "selftest_audio.html",
+        )
+        audio_html = audio_result.html_path.read_text(encoding="utf-8")
+        assert "&lt;unsafe&gt;" in audio_html
+        assert "editorial-insight" in audio_html
+        assert (audio_result.assets_dir / "frames").is_dir()
+
+        source_frame = tmp_path / "selftest.webp"
+        source_frame.write_bytes(b"deterministic-frame-metadata-fixture")
+        video_result = render_visual_brief(
+            calibrated_transcript_blocks=calibrated_blocks,
+            validated_timeline_report=report,
+            trusted_metadata={"title": "Self-test video", "duration_seconds": 420},
+            media_source={"kind": "local-video", "url": None},
+            manifest=visual_manifest,
+            output_destination=tmp_path / "selftest_video.html",
+            frame_assets=[
+                {
+                    "chapter_id": "selftest",
+                    "source_window": calibrated_blocks[0]["window"],
+                    "timestamp_seconds": 1,
+                    "path": source_frame,
+                    "width": 640,
+                    "height": 360,
+                    "alt": "Self-test source frame",
+                    "caption": "Deterministic frame metadata",
+                }
+            ],
+        )
+        video_html = video_result.html_path.read_text(encoding="utf-8")
+        assert 'loading="lazy" decoding="async"' in video_html
+        assert (video_result.assets_dir / "frames" / "001_00-00_00-03.webp").is_file()
+
     print("self-test OK")
 
 # ============================================================
 # ASR transcription
 # ============================================================
 
-def transcribe_chunk_with_retry(asr_provider, chunk_path, chunk_index, total_chunks, window_label):
-    for attempt in range(MAX_RETRIES):
+def _retry_after_seconds(error):
+    if not isinstance(error, HTTPError) or error.code != 429:
+        return None
+    value = error.headers.get("Retry-After") if error.headers else None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def transcribe_chunk_with_retry(
+    asr_provider,
+    chunk_path,
+    chunk_index,
+    total_chunks,
+    window_label,
+    sleep_fn=time.sleep,
+):
+    rate_limit_failures = 0
+    risk_block_failures = 0
+    generic_failures = 0
+    while True:
         try:
             print(
                 f"  转写片段 {chunk_index + 1}/{total_chunks} ({window_label})...",
@@ -1385,15 +1578,115 @@ def transcribe_chunk_with_retry(asr_provider, chunk_path, chunk_index, total_chu
             if is_authentication_error(e):
                 print(f" 失败: {e}")
                 raise
-            if attempt == MAX_RETRIES - 1:
-                print(f" 失败: {e}")
-                raise
-            delay = RETRY_BASE_DELAY * (2 ** attempt)
+            is_rate_limit = isinstance(e, HTTPError) and e.code == 429
+            is_risk_block = "risk blocked" in str(e).lower()
+            if is_risk_block:
+                if risk_block_failures >= MAX_RETRIES - 1:
+                    print(f" 失败: {e}")
+                    raise ASRContentBlockedError(str(e)) from e
+                delay = RETRY_BASE_DELAY * (2 ** risk_block_failures)
+                risk_block_failures += 1
+            elif is_rate_limit:
+                if rate_limit_failures >= ASR_RATE_LIMIT_RETRIES - 1:
+                    print(f" 失败: {e}")
+                    raise
+                delay = _retry_after_seconds(e) or min(
+                    ASR_RATE_LIMIT_BASE_DELAY * (2 ** rate_limit_failures),
+                    ASR_RATE_LIMIT_MAX_DELAY,
+                )
+                rate_limit_failures += 1
+            else:
+                if generic_failures >= MAX_RETRIES - 1:
+                    print(f" 失败: {e}")
+                    raise
+                delay = RETRY_BASE_DELAY * (2 ** generic_failures)
+                generic_failures += 1
             print(f" 失败，{delay}s 后重试... ({e})")
-            time.sleep(delay)
+            sleep_fn(delay)
 
 
-def transcribe_audio(asr_provider, audio_path, temp_dir, segment_minutes, duration_seconds=None):
+def _load_asr_checkpoint(path, *, expected_windows, segment_minutes, duration_seconds, checkpoint_id):
+    path = Path(path)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"ASR checkpoint 无法读取: {path}: {exc}") from exc
+    if not isinstance(data, dict) or data.get("version") != ASR_CHECKPOINT_VERSION:
+        raise RuntimeError(f"ASR checkpoint 版本无效: {path}")
+    if data.get("checkpoint_id") != checkpoint_id:
+        raise RuntimeError(f"ASR checkpoint 输入不匹配: {path}")
+    if data.get("segment_minutes") != segment_minutes:
+        raise RuntimeError(f"ASR checkpoint 分段参数不匹配: {path}")
+    if data.get("duration_seconds") != round(float(duration_seconds), 3):
+        raise RuntimeError(f"ASR checkpoint 音频时长不匹配: {path}")
+    blocks = data.get("blocks")
+    if not isinstance(blocks, list):
+        raise RuntimeError(f"ASR checkpoint blocks 无效: {path}")
+    for block in blocks:
+        if (
+            not isinstance(block, dict)
+            or set(block) != {"window", "text"}
+            or not isinstance(block["window"], str)
+            or not isinstance(block["text"], str)
+            or not block["text"].strip()
+        ):
+            raise RuntimeError(f"ASR checkpoint block 无效: {path}")
+    windows = [block["window"] for block in blocks]
+    if windows != expected_windows[:len(windows)]:
+        raise RuntimeError(f"ASR checkpoint 窗口不是当前任务的完整前缀: {path}")
+    return blocks
+
+
+def _write_asr_checkpoint(
+    path,
+    *,
+    blocks,
+    segment_minutes,
+    duration_seconds,
+    checkpoint_id,
+):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": ASR_CHECKPOINT_VERSION,
+        "checkpoint_id": checkpoint_id,
+        "segment_minutes": segment_minutes,
+        "duration_seconds": round(float(duration_seconds), 3),
+        "blocks": blocks,
+    }
+    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        staged.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(staged, path)
+    finally:
+        if staged.exists():
+            staged.unlink()
+
+
+def _atomic_write_text(path, text):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        staged.write_text(text, encoding="utf-8")
+        os.replace(staged, path)
+    finally:
+        if staged.exists():
+            staged.unlink()
+
+
+def transcribe_audio(
+    asr_provider,
+    audio_path,
+    temp_dir,
+    segment_minutes,
+    duration_seconds=None,
+    checkpoint_path=None,
+    checkpoint_id=None,
+    retry_sleep=time.sleep,
+):
     if duration_seconds is None:
         duration_seconds = get_audio_duration(audio_path)
     if duration_seconds:
@@ -1403,15 +1696,69 @@ def transcribe_audio(asr_provider, audio_path, temp_dir, segment_minutes, durati
     chunks = chunk_audio(audio_path, temp_dir, segment_minutes)
     print(f"共 {len(chunks)} 个片段")
 
+    expected_windows = []
+    for index in range(len(chunks)):
+        start_label, end_label = time_window_for_chunk(index, segment_minutes, duration_seconds)
+        expected_windows.append(f"{start_label}-{end_label}")
+    checkpoint_id = checkpoint_id or str(Path(audio_path).resolve())
     transcript_blocks = []
+    if checkpoint_path:
+        transcript_blocks = _load_asr_checkpoint(
+            checkpoint_path,
+            expected_windows=expected_windows,
+            segment_minutes=segment_minutes,
+            duration_seconds=duration_seconds,
+            checkpoint_id=checkpoint_id,
+        )
+        if transcript_blocks:
+            print(f"恢复 ASR checkpoint: {len(transcript_blocks)}/{len(chunks)} 个窗口")
     for i, chunk in enumerate(chunks):
-        start_label, end_label = time_window_for_chunk(i, segment_minutes, duration_seconds)
-        window_label = f"{start_label}-{end_label}"
-        transcript = transcribe_chunk_with_retry(asr_provider, chunk, i, len(chunks), window_label)
+        window_label = expected_windows[i]
+        if i < len(transcript_blocks):
+            print(f"  跳过已完成片段 {i + 1}/{len(chunks)} ({window_label})")
+            continue
+        try:
+            transcript = transcribe_chunk_with_retry(
+                asr_provider,
+                chunk,
+                i,
+                len(chunks),
+                window_label,
+                sleep_fn=retry_sleep,
+            )
+        except ASRContentBlockedError:
+            fallback_dir = Path(temp_dir) / f"risk_fallback_{i:03d}"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            subchunks = chunk_audio(chunk, fallback_dir, segment_minutes=1)
+            print(
+                f"  窗口 {window_label} 持续 risk blocked，"
+                f"改用 {len(subchunks)} 个同窗内子片段"
+            )
+            subtexts = []
+            for subindex, subchunk in enumerate(subchunks, start=1):
+                subtext = transcribe_chunk_with_retry(
+                    asr_provider,
+                    subchunk,
+                    subindex - 1,
+                    len(subchunks),
+                    f"{window_label} part {subindex}/{len(subchunks)}",
+                    sleep_fn=retry_sleep,
+                )
+                if subtext.strip():
+                    subtexts.append(subtext.strip())
+            transcript = "\n".join(subtexts)
         transcript = transcript.strip() or "（此窗口未返回可用转写文本。）"
-        transcript_blocks.append(f"[{window_label}]\n{transcript}")
+        transcript_blocks.append({"window": window_label, "text": transcript})
+        if checkpoint_path:
+            _write_asr_checkpoint(
+                checkpoint_path,
+                blocks=transcript_blocks,
+                segment_minutes=segment_minutes,
+                duration_seconds=duration_seconds,
+                checkpoint_id=checkpoint_id,
+            )
 
-    full_transcript = "\n\n".join(transcript_blocks)
+    full_transcript = blocks_to_transcript(transcript_blocks)
     print(f"\n转写完成，总字数: {len(full_transcript)} 字符")
     return full_transcript
 
@@ -1503,8 +1850,100 @@ def section_first_claim(section):
         line = line.strip()
         if not line or line.startswith(">") or line.startswith("#"):
             continue
-        return line.replace("|", " ")[:80]
+        claim = line.replace("|", " ")
+        return claim if len(claim) <= 80 else claim[:79].rstrip() + "…"
     return "该窗口内容较少或转写质量有限。"
+
+
+CORE_QUOTE_CUES = (
+    "我觉得",
+    "最重要",
+    "关键",
+    "真正",
+    "本质",
+    "不是",
+    "而是",
+    "意味着",
+    "应该",
+    "不能",
+    "因为",
+    "所以",
+)
+TRANSCRIPT_PLACEHOLDER_MARKERS = (
+    "未返回可用转写",
+    "无可用转写",
+    "没有有效语音",
+    "转写失败",
+)
+CORE_QUOTE_MAX_LENGTH = 120
+
+
+def source_sentences(text):
+    return [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[。！？!?；;，,])\s*|\n+", text or "")
+        if sentence.strip()
+    ]
+
+
+def relevance_terms(text):
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", text or ""))
+    terms = {chinese[index:index + 2] for index in range(max(0, len(chinese) - 1))}
+    terms.update(
+        token.lower()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9._+-]{2,}", text or "")
+    )
+    return terms
+
+
+def bounded_source_passages(text, max_length=CORE_QUOTE_MAX_LENGTH):
+    passages = []
+    stride = max_length // 2
+    for sentence in source_sentences(text):
+        if len(sentence) > max_length:
+            for chunk_start in range(0, len(sentence), stride):
+                passage = sentence[chunk_start:chunk_start + max_length]
+                if len(passage) >= 8:
+                    passages.append(passage)
+                if chunk_start + max_length >= len(sentence):
+                    break
+            continue
+        passages.append(sentence)
+    return passages
+
+
+def select_core_quote(block_text, section):
+    block_text = (block_text or "").strip()
+    if len(block_text) < CORE_QUOTE_MAX_LENGTH and any(
+        marker in block_text for marker in TRANSCRIPT_PLACEHOLDER_MARKERS
+    ):
+        return ""
+
+    candidates = [
+        passage
+        for passage in bounded_source_passages(block_text)
+        if len(passage) >= 8 and "|" not in passage
+    ]
+    if not candidates:
+        return ""
+
+    context_terms = relevance_terms(
+        f"{section_title(section)} {section_first_claim(section)}"
+    )
+
+    def score(sentence):
+        sentence_terms = relevance_terms(sentence)
+        overlap = len(context_terms.intersection(sentence_terms))
+        cue_score = sum(1 for cue in CORE_QUOTE_CUES if cue in sentence)
+        question_penalty = 8 if sentence.endswith(("？", "?")) else 0
+        return (
+            overlap * 8
+            + cue_score * 6
+            - question_penalty
+            - len(sentence) * 0.8
+        )
+
+    return max(candidates, key=score)
 
 
 def fallback_core_table(blocks, sections_by_window):
@@ -1517,8 +1956,10 @@ def fallback_core_table(blocks, sections_by_window):
     for block in blocks:
         window = block["window"]
         section = sections_by_window.get(window, "")
+        quote = select_core_quote(block.get("text", ""), section)
+        evidence = f"“{quote}”" if quote else "无可用原话（该窗口无有效转写）"
         rows.append(
-            f"| {window} | {section_title(section)} | {section_first_claim(section)} | 依据该时间窗口转写整理 |"
+            f"| {window} | {section_title(section)} | {section_first_claim(section)} | {evidence} |"
         )
     return "\n".join(rows)
 
@@ -2541,6 +2982,36 @@ def parse_args():
         "--manual-sections-dir",
         help="读取 IDE 模型已生成的分批章节 .md 文件，合并并校验成最终 timeline 报告；不调用 LLM API",
     )
+    parser.add_argument(
+        "--visual-report-input",
+        help="Existing validated timeline Markdown used by manual visual workflows",
+    )
+    parser.add_argument(
+        "--export-visual-prompts",
+        action="store_true",
+        help="Export JSON-only visual batch prompts without calling an LLM API",
+    )
+    parser.add_argument(
+        "--prepare-visual-synthesis",
+        action="store_true",
+        help="Validate manual visual batch JSON and prepare the final synthesis prompt",
+    )
+    parser.add_argument(
+        "--visual-prompts-dir",
+        help="Visual prompt workflow directory used by prepare mode",
+    )
+    parser.add_argument(
+        "--manual-visual-dir",
+        help="Visual workflow directory containing manifest.json to validate and render",
+    )
+    parser.add_argument(
+        "--visual-source-url",
+        help="Trusted original HTTP/HTTPS video URL for manual visual rendering",
+    )
+    parser.add_argument(
+        "--visual-video-input",
+        help="Trusted local source video for manual representative-frame extraction",
+    )
     parser.add_argument("--bbdown-path", default=os.environ.get("BBDOWN_PATH"), help="BBDown 可执行文件路径，也可用 BBDOWN_PATH")
     parser.add_argument("--bbdown-timeout", type=positive_int, default=int_env("BBDOWN_TIMEOUT", 300), help="BBDown 下载超时秒数（默认: 300）")
     parser.add_argument(
@@ -2735,6 +3206,120 @@ def load_transcript_from_file(path):
     return transcript
 
 
+def attempt_api_visual_brief(*, llm_provider, transcript_blocks, report, report_path,
+                             metadata, media_source, output_destination, batch_size,
+                             concurrency, frame_provider=None):
+    try:
+        result = generate_api_visual_brief(
+            calibrated_transcript_blocks=transcript_blocks,
+            validated_timeline_report=report,
+            trusted_metadata=metadata,
+            media_source=media_source,
+            output_destination=output_destination,
+            complete=lambda messages, max_tokens, label: complete_with_retry(
+                llm_provider,
+                messages,
+                max_tokens,
+                label,
+            ),
+            parallel_map=ordered_parallel_map,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            frame_provider=frame_provider,
+        )
+        print(f"HTML visual brief saved: {result.html_path}")
+        return result
+    except VisualStageError as exc:
+        print(f"Warning: visual stage failed: {exc}. Retained Markdown: {report_path}")
+        return None
+
+
+def visual_media_source(args):
+    source_value = (
+        getattr(args, "visual_video_input", None)
+        or getattr(args, "visual_source_url", None)
+        or args.input
+    )
+    if args.transcript_input and not (
+        getattr(args, "visual_video_input", None) or getattr(args, "visual_source_url", None)
+    ):
+        return {"kind": "transcript", "url": None}
+    source_url = source_value if source_value and is_url(source_value) else None
+    if source_url:
+        if Path(urlparse(source_url).path).suffix.lower() in AUDIO_EXTENSIONS:
+            return {"kind": "audio", "url": source_url}
+        return {"kind": "remote-video", "url": source_url}
+    if source_value and Path(source_value).suffix.lower() in VIDEO_EXTENSIONS:
+        return {"kind": "local-video", "url": None}
+    return {"kind": "audio", "url": None}
+
+
+def create_frame_provider(args, temp_dir, media_source):
+    source_value = (
+        getattr(args, "visual_video_input", None)
+        or getattr(args, "visual_source_url", None)
+        or args.input
+    )
+    if media_source["kind"] == "local-video":
+        return lambda blocks, manifest, duration: extract_representative_frames(
+            video_path=Path(source_value),
+            calibrated_transcript_blocks=blocks,
+            manifest=manifest,
+            working_dir=temp_dir / "visual_frames",
+            duration_seconds=duration,
+        )
+    if media_source["kind"] != "remote-video":
+        return None
+
+    def remote_frame_provider(blocks, manifest, duration):
+        visual_dir = temp_dir / "remote_visual_media"
+        try:
+            if is_bilibili_url(source_value):
+                video_path = download_bilibili_video(
+                    source_value,
+                    visual_dir,
+                    bbdown_path=args.bbdown_path,
+                    cookie=resolve_bilibili_cookie(args),
+                    timeout=args.bbdown_timeout,
+                    auto_install=args.bbdown_auto_install,
+                )
+            else:
+                video_path = download_remote_video(
+                    source_value,
+                    visual_dir,
+                    cookies_file=args.ytdlp_cookies,
+                    cookies_from_browser=args.ytdlp_cookies_from_browser,
+                )
+            return extract_representative_frames(
+                video_path=video_path,
+                calibrated_transcript_blocks=blocks,
+                manifest=manifest,
+                working_dir=temp_dir / "visual_frames",
+                duration_seconds=duration,
+            )
+        except Exception as exc:
+            print(f"Warning: visual media download failed: {exc}")
+            return []
+
+    return remote_frame_provider
+
+
+def load_validated_timeline_report(path, transcript):
+    report_path = Path(path)
+    if not report_path.is_file():
+        raise VisualStageError(f"visual workflow report is missing: {report_path}")
+    report = report_path.read_text(encoding="utf-8")
+    validation = validate_timeline_report(transcript, report)
+    if (
+        validation["missing"]
+        or validation["extra"]
+        or validation["duplicates"]
+        or not validation["has_core_table"]
+    ):
+        raise VisualStageError(f"visual workflow report is not validated: {validation}")
+    return report
+
+
 def main():
     args = parse_args()
 
@@ -2753,6 +3338,24 @@ def main():
 
     if not args.input and not args.transcript_input:
         print("错误: 缺少输入音频/视频文件路径、URL，或 --transcript-input。")
+        sys.exit(2)
+
+    visual_actions = sum(
+        bool(value)
+        for value in (
+            args.export_visual_prompts,
+            args.prepare_visual_synthesis,
+            args.manual_visual_dir,
+        )
+    )
+    if visual_actions > 1:
+        print("Error: choose only one manual visual workflow action.")
+        sys.exit(2)
+    if visual_actions and (not args.transcript_input or not args.visual_report_input):
+        print("Error: manual visual workflows require --transcript-input and --visual-report-input.")
+        sys.exit(2)
+    if args.prepare_visual_synthesis and not args.visual_prompts_dir:
+        print("Error: --prepare-visual-synthesis requires --visual-prompts-dir.")
         sys.exit(2)
 
     if (args.export_ide_prompts or args.manual_sections_dir) and args.report_style != "timeline":
@@ -2789,6 +3392,7 @@ def main():
         base_name = output_base_name(args)
         duration_seconds = None
         transcript_path = Path(args.transcript_input) if args.transcript_input else None
+        asr_checkpoint_path = None
 
         if args.transcript_input:
             transcript = load_transcript_from_file(args.transcript_input)
@@ -2800,6 +3404,7 @@ def main():
             asr_provider = create_asr_provider(args)
             audio_path = resolve_input_audio(args, temp_dir)
             duration_seconds = get_audio_duration(audio_path)
+            asr_checkpoint_path = output_dir / f"{base_name}_asr_checkpoint.json"
             print("\n=== ASR 转写 ===")
             try:
                 transcript = transcribe_audio(
@@ -2808,6 +3413,8 @@ def main():
                     temp_dir,
                     segment_minutes=args.segment_minutes,
                     duration_seconds=duration_seconds,
+                    checkpoint_path=asr_checkpoint_path,
+                    checkpoint_id=str(args.input),
                 )
             except Exception as exc:
                 if handle_cached_asr_authentication_error(asr_provider, exc):
@@ -2817,7 +3424,9 @@ def main():
 
             if args.save_transcript or args.transcribe_only or args.export_ide_prompts:
                 transcript_path = output_dir / f"{base_name}_转写.txt"
-                transcript_path.write_text(transcript, encoding="utf-8")
+                _atomic_write_text(transcript_path, transcript)
+                if asr_checkpoint_path.exists():
+                    asr_checkpoint_path.unlink()
                 print(f"转写文本已保存: {transcript_path}")
 
         metadata = build_metadata(args, base_name, duration_seconds)
@@ -2826,6 +3435,43 @@ def main():
             and Path(args.transcript_input).stem.endswith(("_校对", "_calibrated"))
         )
         metadata["transcript_stage"] = "calibrated" if input_is_calibrated else "raw_asr"
+
+        if visual_actions:
+            blocks = parse_transcript_blocks(transcript)
+            report = load_validated_timeline_report(args.visual_report_input, transcript)
+            if args.export_visual_prompts:
+                prompt_root = export_visual_prompts(
+                    calibrated_transcript_blocks=blocks,
+                    validated_timeline_report=report,
+                    trusted_metadata=metadata,
+                    output_dir=output_dir,
+                    base_name=base_name,
+                    batch_size=args.timeline_batch_size,
+                )
+                print(f"Visual prompts exported: {prompt_root}")
+            elif args.prepare_visual_synthesis:
+                synthesis_path = prepare_visual_synthesis(
+                    calibrated_transcript_blocks=blocks,
+                    validated_timeline_report=report,
+                    trusted_metadata=metadata,
+                    media_source=visual_media_source(args),
+                    prompt_root=args.visual_prompts_dir,
+                    batch_size=args.timeline_batch_size,
+                )
+                print(f"Visual synthesis prompt prepared: {synthesis_path}")
+            else:
+                media_source = visual_media_source(args)
+                result = render_manual_visual_brief(
+                    calibrated_transcript_blocks=blocks,
+                    validated_timeline_report=report,
+                    trusted_metadata=metadata,
+                    media_source=media_source,
+                    prompt_root=args.manual_visual_dir,
+                    output_destination=output_dir / f"{base_name}_图文速览.html",
+                    frame_provider=create_frame_provider(args, temp_dir, media_source),
+                )
+                print(f"HTML visual brief saved: {result.html_path}")
+            return
 
         if args.transcribe_only:
             print("\n=== 完成 ===")
@@ -2882,12 +3528,14 @@ def main():
             print("保存完成后用 --manual-sections-dir 合并生成最终报告。")
             return
 
+        visual_llm_provider = None
         if args.manual_sections_dir:
             print("\n=== 合并 IDE 手动章节 ===")
             report = generate_manual_report(transcript, metadata, args.manual_sections_dir)
         else:
             print("\n=== LLM 总结 ===")
             llm_provider = create_llm_provider(args)
+            visual_llm_provider = llm_provider
             if args.report_style == "timeline":
                 if proofread_mode == "separate" and transcript_path is None:
                     transcript_path = output_dir / f"{base_name}_转写.txt"
@@ -2947,7 +3595,38 @@ def main():
         report_path = output_dir / f"{base_name}_{report_suffix}.md"
         report_path.write_text(report, encoding="utf-8")
         print(f"报告已保存: {report_path}")
-
+        if args.report_style == "timeline" and visual_llm_provider is not None:
+            media_source = visual_media_source(args)
+            frame_provider = create_frame_provider(args, temp_dir, media_source)
+            attempt_api_visual_brief(
+                llm_provider=visual_llm_provider,
+                transcript_blocks=parse_transcript_blocks(transcript),
+                report=report,
+                report_path=report_path,
+                metadata=metadata,
+                media_source=media_source,
+                output_destination=output_dir / f"{base_name}_图文速览.html",
+                batch_size=args.timeline_batch_size,
+                concurrency=args.llm_concurrency,
+                frame_provider=frame_provider,
+            )
+        elif args.report_style == "timeline" and args.manual_sections_dir:
+            try:
+                prompt_root = export_visual_prompts(
+                    calibrated_transcript_blocks=parse_transcript_blocks(transcript),
+                    validated_timeline_report=report,
+                    trusted_metadata=metadata,
+                    output_dir=output_dir,
+                    base_name=base_name,
+                    batch_size=args.timeline_batch_size,
+                )
+                print(f"Visual prompts exported: {prompt_root}")
+                print("Save JSON-only batch results, then run prepare and manual render stages.")
+            except Exception as exc:
+                print(
+                    f"Warning: visual prompt stage failed: {exc}. "
+                    f"Retained Markdown: {report_path}"
+                )
         elapsed = time.time() - start_time
         print("\n=== 完成 ===")
         print(f"总耗时: {elapsed:.1f} 秒")

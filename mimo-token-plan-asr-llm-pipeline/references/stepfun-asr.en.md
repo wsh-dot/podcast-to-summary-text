@@ -54,6 +54,13 @@ Provider-specific options:
 - If the connection ends without `transcript.text.done`, treat it as truncated and retry; never deliver accumulated deltas.
 - Ignore blank lines, `event:` lines, and a `[DONE]` sentinel.
 
+## Rate Limits, Content Blocks, and Resume
+
+- HTTP 429 gets up to eight total attempts. Honor a valid `Retry-After`; otherwise back off with a 15, 30, 60, and 120 second cap. Rate limits and ordinary transient errors share the same attempt budget.
+- Retry `risk blocked` quickly on the original chunk. If it persists, split only that three-minute window into up to three one-minute subchunks, then merge them under the original window label.
+- Atomically update `<output>_transcript.asr-checkpoint.json` after every completed window. Resume only after validating the input identity, `segment_minutes`, media duration, and the contiguous completed prefix. Remove the checkpoint only after atomically publishing the final transcript.
+- Checkpoints never contain credentials. Never edit one to bypass mismatch validation, and never use standard API versus Step Plan routing as a rate-limit fallback.
+
 ## Official Documentation
 
 - [StepAudio 2.5 ASR model](https://platform.stepfun.com/docs/zh/guides/models/stepaudio-2.5-asr)
@@ -65,6 +72,7 @@ Provider-specific options:
 
 ```bash
 python -m unittest tests.test_stepfun_asr -v
+python -m unittest tests.test_asr_resilience -v
 python scripts/mimo_podcast_tool.py --self-test
 python scripts/mimo_podcast_tool.py --help
 ```
