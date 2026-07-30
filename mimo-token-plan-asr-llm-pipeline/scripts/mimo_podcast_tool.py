@@ -110,6 +110,8 @@ DEFAULT_TIMELINE_BATCH_SIZE = 6
 DEFAULT_PROOFREAD_BATCH_SIZE = 6
 DEFAULT_PROOFREAD_MIN_RATIO = 0.55
 DEFAULT_LLM_CONCURRENCY = 2
+CREDENTIAL_STORE_ENV = "MIMO_PODCAST_CREDENTIALS_FILE"
+CREDENTIAL_STORE_NAME = "asr-credentials.json"
 
 BBDOWN_VERSION = "1.6.3"
 BBDOWN_RELEASE_BASE_URL = "https://github.com/nilaoda/BBDown/releases/download"
@@ -931,51 +933,225 @@ def provider_env(defaults, provider, env_key="api_envs"):
     return first_env(provider_default(defaults, provider, env_key, ()))
 
 
+def credential_store_path():
+    """Return the user-local ASR credential store (never a repository path)."""
+    override = os.environ.get(CREDENTIAL_STORE_ENV)
+    if override:
+        return Path(override).expanduser()
+    if platform.system() == "Windows":
+        root = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+    elif platform.system() == "Darwin":
+        root = Path.home() / "Library" / "Application Support"
+    else:
+        root = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return root / "mimo-podcast-tool" / CREDENTIAL_STORE_NAME
+
+
+def load_asr_credentials():
+    path = credential_store_path()
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    providers = payload.get("providers", {})
+    return providers if isinstance(providers, dict) else {}
+
+
+def save_asr_credentials(provider, credentials):
+    """Atomically persist credentials only after a successful ASR request."""
+    path = credential_store_path()
+    providers = load_asr_credentials()
+    providers[provider] = {
+        key: value
+        for key, value in credentials.items()
+        if isinstance(value, str) and value
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {"version": 1, "providers": providers}
+    try:
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(temp_path, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def forget_asr_credentials(provider):
+    path = credential_store_path()
+    providers = load_asr_credentials()
+    if provider not in providers:
+        return False
+    del providers[provider]
+    if providers:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps({"version": 1, "providers": providers}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            try:
+                os.chmod(temp_path, 0o600)
+            except OSError:
+                pass
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    else:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def _attach_asr_credential_state(provider, provider_name, credentials, used_cache):
+    provider._credential_provider = provider_name
+    provider._credentials_to_persist = credentials
+    provider._credential_source = "cache" if used_cache else "provided"
+    return provider
+
+
+def is_authentication_error(exc):
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    status = status or getattr(response, "status_code", None)
+    if status in (401, 403):
+        return True
+    error_code = str(getattr(exc, "code", "") or "").lower()
+    message = f"{type(exc).__name__} {error_code} {exc}".lower()
+    markers = (
+        "unauthorized",
+        "invalid api key",
+        "invalid_api_key",
+        "authenticationerror",
+        "authfailure",
+        "secretidnotfound",
+        "signaturefailure",
+        "invalidcredential",
+    )
+    return any(marker in message for marker in markers)
+
+
+def persist_successful_asr_credentials(provider):
+    if getattr(provider, "_credential_source", None) != "provided":
+        return
+    save_asr_credentials(
+        provider._credential_provider,
+        provider._credentials_to_persist,
+    )
+    print(f"ASR 凭据已保存到本机用户配置，后续新对话将自动复用（provider: {provider._credential_provider}）。")
+
+
+def handle_cached_asr_authentication_error(provider, exc):
+    if (
+        getattr(provider, "_credential_source", None) == "cache"
+        and is_authentication_error(exc)
+    ):
+        provider_name = provider._credential_provider
+        forget_asr_credentials(provider_name)
+        print(
+            f"错误: 已保存的 {provider_name} ASR 凭据已失效或被拒绝，"
+            "本机缓存已删除。请重新提供最新有效的 ASR API Key 后重试。"
+        )
+        return True
+    return False
+
+
 def create_asr_provider(args):
     provider = args.asr_provider
+    cached = load_asr_credentials().get(provider, {})
+    if not isinstance(cached, dict):
+        cached = {}
     if provider == "mimo":
+        provided_key = args.asr_api_key or args.api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider)
+        used_cache = not provided_key and bool(cached.get("api_key"))
         api_key = require_value(
-            args.asr_api_key or args.api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider),
-            "MiMo ASR 需要 --api-key、--asr-api-key 或 MIMO_API_KEY。",
+            provided_key or cached.get("api_key"),
+            "MiMo ASR 需要 --api-key、--asr-api-key、MIMO_API_KEY，或已保存的本机凭据。",
         )
         base_url = args.asr_base_url or args.base_url or provider_default(ASR_PROVIDER_DEFAULTS, provider, "base_url")
         model = args.asr_model or provider_default(ASR_PROVIDER_DEFAULTS, provider, "model")
         if not api_key.startswith("tp-"):
             print("警告: MiMo Token Plan API Key 通常以 'tp-' 开头。")
-        return MiMoASRProvider(api_key=api_key, base_url=base_url, model=model)
+        return _attach_asr_credential_state(
+            MiMoASRProvider(api_key=api_key, base_url=base_url, model=model),
+            provider,
+            {"api_key": api_key},
+            used_cache,
+        )
 
     if provider == "aliyun-qwen":
+        provided_key = args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider)
+        used_cache = not provided_key and bool(cached.get("api_key"))
         api_key = require_value(
-            args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider),
-            "阿里 Qwen ASR 需要 --asr-api-key、DASHSCOPE_API_KEY 或 ALIYUN_API_KEY。",
+            provided_key or cached.get("api_key"),
+            "阿里 Qwen ASR 需要 --asr-api-key、环境变量，或已保存的本机凭据。",
         )
         base_url = args.asr_base_url or provider_default(ASR_PROVIDER_DEFAULTS, provider, "base_url")
         model = args.asr_model or provider_default(ASR_PROVIDER_DEFAULTS, provider, "model")
-        return AliyunQwenASRProvider(api_key=api_key, base_url=base_url, model=model)
+        return _attach_asr_credential_state(
+            AliyunQwenASRProvider(api_key=api_key, base_url=base_url, model=model),
+            provider,
+            {"api_key": api_key},
+            used_cache,
+        )
 
     if provider == "stepfun":
+        provided_key = args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider)
+        used_cache = not provided_key and bool(cached.get("api_key"))
         api_key = require_value(
-            args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider),
-            "阶跃星辰 ASR 需要 --asr-api-key、STEPFUN_API_KEY 或 STEP_API_KEY。",
+            provided_key or cached.get("api_key"),
+            "阶跃星辰 ASR 需要 --asr-api-key、环境变量，或已保存的本机凭据。",
         )
         defaults = ASR_PROVIDER_DEFAULTS[provider]
         default_base_url = defaults["plan_base_url"] if args.stepfun_plan else defaults["base_url"]
-        return StepFunSSEASRProvider(
-            api_key=api_key,
-            base_url=args.asr_base_url or default_base_url,
-            model=args.asr_model or defaults["model"],
-            language=args.stepfun_language,
-            timeout=args.stepfun_timeout,
+        return _attach_asr_credential_state(
+            StepFunSSEASRProvider(
+                api_key=api_key,
+                base_url=args.asr_base_url or default_base_url,
+                model=args.asr_model or defaults["model"],
+                language=args.stepfun_language,
+                timeout=args.stepfun_timeout,
+            ),
+            provider,
+            {"api_key": api_key},
+            used_cache,
         )
 
     if provider == "tencent":
+        provided_secret_id = args.tencent_secret_id or provider_env(
+            ASR_PROVIDER_DEFAULTS, provider, "secret_id_envs"
+        )
+        provided_secret_key = args.tencent_secret_key or provider_env(
+            ASR_PROVIDER_DEFAULTS, provider, "secret_key_envs"
+        )
+        used_cache = (
+            (not provided_secret_id and bool(cached.get("secret_id")))
+            or (not provided_secret_key and bool(cached.get("secret_key")))
+        )
         secret_id = require_value(
-            args.tencent_secret_id or provider_env(ASR_PROVIDER_DEFAULTS, provider, "secret_id_envs"),
-            "腾讯 ASR 需要 --tencent-secret-id 或 TENCENTCLOUD_SECRET_ID。",
+            provided_secret_id or cached.get("secret_id"),
+            "腾讯 ASR 需要 SecretId 参数、环境变量，或已保存的本机凭据。",
         )
         secret_key = require_value(
-            args.tencent_secret_key or provider_env(ASR_PROVIDER_DEFAULTS, provider, "secret_key_envs"),
-            "腾讯 ASR 需要 --tencent-secret-key 或 TENCENTCLOUD_SECRET_KEY。",
+            provided_secret_key or cached.get("secret_key"),
+            "腾讯 ASR 需要 SecretKey 参数、环境变量，或已保存的本机凭据。",
         )
         region = args.tencent_region or provider_default(ASR_PROVIDER_DEFAULTS, provider, "region")
         engine_model_type = (
@@ -983,14 +1159,19 @@ def create_asr_provider(args):
             or args.asr_model
             or provider_default(ASR_PROVIDER_DEFAULTS, provider, "engine_model_type")
         )
-        return TencentRecordingASRProvider(
-            secret_id=secret_id,
-            secret_key=secret_key,
-            region=region,
-            engine_model_type=engine_model_type,
-            res_text_format=args.tencent_res_text_format,
-            poll_interval=args.tencent_poll_interval,
-            max_polls=args.tencent_max_polls,
+        return _attach_asr_credential_state(
+            TencentRecordingASRProvider(
+                secret_id=secret_id,
+                secret_key=secret_key,
+                region=region,
+                engine_model_type=engine_model_type,
+                res_text_format=args.tencent_res_text_format,
+                poll_interval=args.tencent_poll_interval,
+                max_polls=args.tencent_max_polls,
+            ),
+            provider,
+            {"secret_id": secret_id, "secret_key": secret_key},
+            used_cache,
         )
 
     raise ValueError(f"暂不支持 ASR provider: {provider}")
@@ -1201,6 +1382,9 @@ def transcribe_chunk_with_retry(asr_provider, chunk_path, chunk_index, total_chu
             print(f" 完成 ({len(result or '')} 字符)")
             return result or ""
         except Exception as e:
+            if is_authentication_error(e):
+                print(f" 失败: {e}")
+                raise
             if attempt == MAX_RETRIES - 1:
                 print(f" 失败: {e}")
                 raise
@@ -2385,6 +2569,11 @@ def parse_args():
         default="mimo",
         help="ASR provider（默认: mimo；可选 aliyun-qwen、stepfun、tencent）",
     )
+    parser.add_argument(
+        "--forget-asr-credentials",
+        action="store_true",
+        help="删除所选 ASR provider 的本机凭据缓存后退出",
+    )
     parser.add_argument("--asr-api-key", default=os.environ.get("ASR_API_KEY"), help="ASR provider API Key")
     parser.add_argument("--asr-base-url", default=os.environ.get("ASR_BASE_URL"), help="ASR provider Base URL")
     parser.add_argument(
@@ -2553,6 +2742,15 @@ def main():
         run_self_test()
         return
 
+    if args.forget_asr_credentials:
+        removed = forget_asr_credentials(args.asr_provider)
+        print(
+            f"已删除 {args.asr_provider} ASR 的本机凭据缓存。"
+            if removed
+            else f"{args.asr_provider} ASR 没有本机凭据缓存。"
+        )
+        return
+
     if not args.input and not args.transcript_input:
         print("错误: 缺少输入音频/视频文件路径、URL，或 --transcript-input。")
         sys.exit(2)
@@ -2603,13 +2801,19 @@ def main():
             audio_path = resolve_input_audio(args, temp_dir)
             duration_seconds = get_audio_duration(audio_path)
             print("\n=== ASR 转写 ===")
-            transcript = transcribe_audio(
-                asr_provider,
-                audio_path,
-                temp_dir,
-                segment_minutes=args.segment_minutes,
-                duration_seconds=duration_seconds,
-            )
+            try:
+                transcript = transcribe_audio(
+                    asr_provider,
+                    audio_path,
+                    temp_dir,
+                    segment_minutes=args.segment_minutes,
+                    duration_seconds=duration_seconds,
+                )
+            except Exception as exc:
+                if handle_cached_asr_authentication_error(asr_provider, exc):
+                    sys.exit(1)
+                raise
+            persist_successful_asr_credentials(asr_provider)
 
             if args.save_transcript or args.transcribe_only or args.export_ide_prompts:
                 transcript_path = output_dir / f"{base_name}_转写.txt"

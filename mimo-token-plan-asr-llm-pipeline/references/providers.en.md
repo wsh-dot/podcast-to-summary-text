@@ -16,10 +16,19 @@ Do not put vendor-specific request payloads inside the report engine.
 ## Credential Roles
 
 - At task start, ask the user to choose the ASR source and summary mode before running downloads, ASR, or LLM calls. Ask serially: first ASR source, then after the answer is recorded, ask summary mode. Use an interactive choice UI for the current single question when available; otherwise ask in text and wait.
-- **ASR credentials are required** for audio/video/URL input unless the user already provides a windowed transcript.
+- **Valid ASR credentials are required** for audio/video/URL input unless the user already provides a windowed transcript. The script checks the provider's user-local cache first, so do not ask again when a cached credential is available.
 - **LLM credentials are optional**. They are needed only when the user explicitly selects API LLM proofreading/summary.
 - A MiMo `--api-key` may be used for ASR only. Do not infer that the user wants MiMo LLM summary unless they selected API LLM mode.
 - If the user has ASR credentials but no LLM credentials, use the agent-assisted IDE proofreading and summary route by default.
+
+### Local persistence
+
+- Credentials supplied through CLI arguments or environment variables are saved only after a real ASR operation succeeds; unverified credentials are never saved.
+- Default location: Windows `%APPDATA%\mimo-podcast-tool\asr-credentials.json`, macOS `~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`, Linux `${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`.
+- `MIMO_PODCAST_CREDENTIALS_FILE` overrides the location, primarily for isolated tests.
+- Explicit arguments/environment variables take precedence over the cache. A newly verified credential replaces the cached value for that provider.
+- Delete only the affected provider cache after 401/403 or an explicit authentication failure. Rate limits, network failures, and server errors must retain the cache.
+- Clear a provider manually with `python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider <provider>`.
 
 ASR credential matrix:
 

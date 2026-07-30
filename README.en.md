@@ -55,7 +55,7 @@ The default report style is a strict timeline report:
 
 The skill separates ASR transcription, LLM proofreading, and LLM summary generation. Raw ASR often lacks punctuation and contains typos, broken English terms, and misrecognized names, so the default flow proofreads before summarizing.
 
-ASR credentials are required when starting from audio, video, or URL input. LLM credentials are optional.
+Audio, video, and URL inputs require a resolvable ASR credential. The script checks explicit arguments, environment variables, then the user-local cache; it asks the user only when all three are absent. LLM credentials are optional.
 
 The agent should ask one question at a time at task start:
 
@@ -167,6 +167,28 @@ Choose one ASR source:
 
 Do not commit API keys, cookies, browser profiles, or exported credentials.
 
+### Persistent ASR credentials across conversations
+
+After a credential supplied through an argument or environment variable completes a real ASR transcription successfully, the script saves it in the user-local configuration. New conversations can omit the credential:
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
+# Later conversations
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only
+```
+
+Default locations:
+
+- Windows: `%APPDATA%\mimo-podcast-tool\asr-credentials.json`
+- macOS: `~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`
+
+A cached credential rejected with 401/403 or an explicit authentication error is removed only for that provider, after which the agent requests a replacement. Rate limits, network failures, and server errors retain the cache. To clear one manually:
+
+```bash
+python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider mimo
+```
+
 ## Common Commands
 
 Run commands from the skill directory:
@@ -236,3 +258,9 @@ python scripts/mimo_podcast_tool.py --help
 ```
 
 The self-test does not call any external API.
+
+This release also passed:
+
+- `python -m unittest discover -s tests -v`: 36 tests
+- skill-judge: `116/120 (A)`
+- SkillOpt held-out gate: `hard=1.0000`, `soft=1.0000` (6/6)

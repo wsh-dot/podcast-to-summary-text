@@ -215,3 +215,17 @@ cmd /c "set MIMO_API_KEY=tp-xxxx && python script.py"
 # Option 3: use PowerShell
 $env:MIMO_API_KEY="tp-xxxx"; python script.py
 ```
+
+### Local ASR key cache
+
+After a MiMo ASR key supplied by `--api-key`, `--asr-api-key`, or an environment variable completes a real ASR operation successfully, the script saves it in the user-local credential store. New conversations can then omit the key:
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only
+```
+
+A cached key rejected with 401/403 or an explicit authentication failure is deleted so the agent can request a replacement. A 404 indicates an endpoint error and a 429 indicates rate limiting; neither deletes the cache. Clear it manually with:
+
+```bash
+python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider mimo
+```

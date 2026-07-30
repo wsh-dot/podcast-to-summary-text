@@ -22,16 +22,18 @@ description: 将本地音频/视频、Bilibili/B站、小宇宙等 URL 或已有
 
 每轮最多询问一个选择：
 
-1. **ASR 来源**：MiMo ASR、阿里 Qwen ASR、阶跃星辰普通 API、阶跃星辰 Step Plan、腾讯 ASR、已有 transcript。媒体或 URL 输入必须同时取得相应凭据；已有 transcript 直接记为已确定。选择阶跃星辰时必须明确普通计费还是 Step Plan 订阅额度。
+1. **ASR 来源**：MiMo ASR、阿里 Qwen ASR、阶跃星辰普通 API、阶跃星辰 Step Plan、腾讯 ASR、已有 transcript。媒体或 URL 输入必须解析出有效凭据（显式参数、环境变量或本机缓存）；只有三者都没有时才向用户索取。已有 transcript 直接记为已确定。选择阶跃星辰时必须明确普通计费还是 Step Plan 订阅额度。
 2. **总结方式**：当前 IDE/Agent 模型（推荐）、指定 LLM API、仅导出 prompts。只有收到或推断出第一个答案后才能询问第二个。
 
-用户未回答总结方式时使用 `ide-agent`。MiMo `--api-key` 默认只代表 ASR 授权，不代表用户同意调用 MiMo LLM。凭据只通过 CLI 参数或环境变量传给脚本，不写入报告、日志示例或仓库文件。
+用户未回答总结方式时使用 `ide-agent`。MiMo `--api-key` 默认只代表 ASR 授权，不代表用户同意调用 MiMo LLM。
+
+ASR 凭据只在没有显式值、环境变量和该 provider 的有效本机缓存时向用户索取。新凭据仅在真实 ASR 成功后保存；后续新对话省略凭据参数并自动复用。缓存凭据遇到 401/403 或明确认证失败时，只删除该 provider 的缓存并重新向用户索取最新凭据；429、网络错误或服务端错误不得清除。凭据不得出现在回复、报告、日志示例或仓库文件中。存储位置、优先级和主动清除见 `references/providers.md`。
 
 ## 输入路由
 
 | 输入 | 必须执行的路由 |
 |---|---|
-| 本地音频/视频 | 要求 ASR 凭据；视频先由 ffmpeg 提取音频。 |
+| 本地音频/视频 | 解析有效 ASR 凭据（含本机缓存）；视频先由 ffmpeg 提取音频。 |
 | `bilibili.com`、其子域名、`b23.tv` | 仅用 BBDown；缺失时安装并校验固定版 1.6.3。需要登录态时使用 `--bilibili-cookie`、cookie 文件或 `BILIBILI_COOKIE`。 |
 | 小宇宙或其他 HTTP/HTTPS URL | 使用 `yt-dlp`，然后进入 ASR。 |
 | 带 `[HH:MM-HH:MM]` 窗口的 `.txt` | 使用 `--transcript-input`，跳过下载和 ASR。`*_校对.txt` / `*_calibrated.txt` 默认跳过重复校对。 |
@@ -52,7 +54,11 @@ python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only \
 1. 只执行转写并保存原始窗口：
 
    ```bash
-   python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
+  # 首次使用时传入；成功后会保存到本机
+  python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
+
+  # 后续对话直接复用本机凭据
+  python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only
    ```
 
 2. 逐窗口校对并保持标签不变，保存为 `<base_name>_校对.txt`。

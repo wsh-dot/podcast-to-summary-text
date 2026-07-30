@@ -16,10 +16,20 @@
 ## 凭证职责
 
 - 任务开始时，在下载、ASR 或 LLM 调用之前，先让用户选择 ASR 来源和总结方式。必须串行询问：先问 ASR 来源，收到并记录答案后，再问总结方式。可用交互式选择 UI 时，只展示当前这一个问题；否则用文字询问并等待用户回答。
-- 对于音频、视频或 URL 输入，**ASR 凭证是必需的**；除非用户已经提供带时间窗口的 transcript。
+- 对于音频、视频或 URL 输入，**有效的 ASR 凭证是必需的**；除非用户已经提供带时间窗口的 transcript。脚本会先读取该 provider 的本机用户级缓存，因此缓存存在时不要重复索取。
 - **LLM 凭证是可选的**。只有当用户明确选择 API LLM 校对/总结时才需要。
 - MiMo `--api-key` 可能只用于 ASR。不要因为用户提供了 MiMo key，就推断用户也同意用 MiMo LLM 总结；除非用户选择了 API LLM 模式。
 - 如果用户有 ASR 凭证但没有 LLM 凭证，默认使用当前 IDE/Agent 模型辅助校对和总结路线。
+
+### 本机持久化
+
+- 显式参数或环境变量提供的 ASR 凭据，在第一次真实 ASR 请求成功后保存；未验证成功的凭据不保存。
+- 默认位置：Windows `%APPDATA%\mimo-podcast-tool\asr-credentials.json`，macOS `~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`，Linux `${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`。
+- 可用 `MIMO_PODCAST_CREDENTIALS_FILE` 覆盖位置，主要用于隔离测试。
+- 文件不属于仓库，并尽可能设置为仅当前用户可读写。不得打印、提交或写入报告。
+- 显式参数/环境变量优先于缓存；新凭据验证成功后覆盖同 provider 的旧缓存。
+- 只有缓存凭据出现 401/403 或明确认证错误时才自动删除，并提示用户提供最新凭据。限流、网络错误、服务端错误不得清除缓存。
+- 用户可运行 `python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider <provider>` 主动清除。
 
 ASR 凭证矩阵：
 
