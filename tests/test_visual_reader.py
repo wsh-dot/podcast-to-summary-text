@@ -308,7 +308,8 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
             for expected in (
                 "compact-editorial",
                 "insight-grid",
-                "chapter-band",
+                "chapter-grid",
+                "chapter-card",
                 "flow-diagram",
                 "timeline-diagram",
                 "comparison-diagram",
@@ -319,11 +320,17 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 "--color-primary:#CC8800",
                 "--color-secondary:#C55221",
                 "--color-focus:#1D4ED8",
-                "chapter-band:nth-of-type(2n+3)",
+                "grid-template-columns:repeat(2,minmax(0,1fr))",
+                "@media(max-width:680px)",
                 "@media(hover:none)",
                 "min-height:44px",
             ):
                 self.assertIn(expected, page)
+            self.assertEqual(page.count('class="chapter-card"'), len(compact_manifest()["chapters"]))
+            for chapter in compact_manifest()["chapters"]:
+                self.assertIn(chapter["summary"]["text"], page)
+                for evidence in chapter["evidence"]:
+                    self.assertIn(evidence["label"], page)
             for forbidden in (
                 "<img",
                 "type=\"search\"",
