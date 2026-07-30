@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -202,6 +203,51 @@ def _render_compact_visual(visual):
     )
 
 
+def _split_summary_units(text, punctuation):
+    units = [
+        part
+        for part in re.findall(rf"[^{re.escape(punctuation)}]+[{re.escape(punctuation)}]*", text)
+        if part
+    ]
+    return units if "".join(units) == text else [text]
+
+
+def _summary_card_groups(summary, minimum=3, maximum=5):
+    text = summary
+    units = _split_summary_units(text, "。！？!?")
+    if len(units) < minimum:
+        units = _split_summary_units(text, "。！？!?；;：:")
+    if len(units) < minimum:
+        units = _split_summary_units(text, "。！？!?；;：:，,")
+    if len(units) < minimum and len(text) >= minimum:
+        cut_points = [round(len(text) * index / minimum) for index in range(minimum + 1)]
+        units = [text[cut_points[index]:cut_points[index + 1]] for index in range(minimum)]
+
+    target = min(maximum, len(units))
+    if len(units) <= target:
+        groups = units
+    else:
+        groups = []
+        start = 0
+        for slot in range(target):
+            remaining_units = len(units) - start
+            remaining_slots = target - slot
+            take = (remaining_units + remaining_slots - 1) // remaining_slots
+            groups.append("".join(units[start:start + take]))
+            start += take
+    if "".join(groups) != text:
+        raise VisualStageError("summary card split must preserve the complete chapter summary")
+    return groups
+
+
+def _summary_card_title(text):
+    compact = re.sub(r"\s+", " ", text).strip(" “”—\"'")
+    candidate = re.split(r"[，,。；;：:！？!?]", compact, maxsplit=1)[0].strip()
+    if len(candidate) < 4:
+        candidate = compact
+    return candidate if len(candidate) <= 18 else f"{candidate[:18]}…"
+
+
 def _render_compact_page(blocks, metadata, media_source, manifest):
     title = _text(metadata.get("title", "图文解读"))
     language = _text(metadata.get("language", "zh-CN"))
@@ -218,12 +264,22 @@ def _render_compact_page(blocks, metadata, media_source, manifest):
         visuals = "".join(_render_compact_visual(item) for item in chapter.get("visuals", []))
         if not visuals:
             visuals = '<div class="editorial-text-treatment">本节以文字解读呈现</div>'
+        summary_cards = "".join(
+            f'<article class="summary-card"{_source_attrs(chapter["summary"])}>'
+            f'<p class="summary-card-index">{card_index:02d}</p>'
+            f'<h3>{_text(_summary_card_title(card_text))}</h3>'
+            f'<p>{_text(card_text)}</p></article>'
+            for card_index, card_text in enumerate(
+                _summary_card_groups(chapter["summary"]["text"]),
+                start=1,
+            )
+        )
         chapter_html.append(
-            f'<section id="{_text(chapter["id"])}" class="chapter-card">'
+            f'<section id="{_text(chapter["id"])}" class="chapter-section">'
             f'<div class="chapter-copy"><p class="chapter-index">SECTION {index:02d}</p>'
             f'<h2{_source_attrs(chapter["title"])}>{_claim_text(chapter["title"])}</h2>'
-            f'<p class="chapter-summary"{_source_attrs(chapter["summary"])}>'
-            f'{_claim_text(chapter["summary"])}</p><ul class="source-tags">{evidence}</ul></div>'
+            f'<ul class="source-tags">{evidence}</ul></div>'
+            f'<div class="summary-card-grid">{summary_cards}</div>'
             f'<div class="chapter-graphics">{visuals}</div></section>'
         )
     source_link = ""
@@ -232,16 +288,17 @@ def _render_compact_page(blocks, metadata, media_source, manifest):
     return f'''<!doctype html>
 <html lang="{language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title><style>
-:root{{--color-primary:#CC8800;--color-primary-ink:#7A5100;--color-secondary:#C55221;--color-secondary-strong:#963B18;--color-success:#16A34A;--color-warning:#D97706;--color-danger:#DC2626;--color-surface:#FFFFFF;--color-canvas:#F4E8D3;--color-cream:#FFF8E8;--color-text:#111827;--color-muted:#594E43;--color-line:#D4C2A8;--color-focus:#1D4ED8;--shadow-card:0 14px 34px rgba(62,38,14,.10);--shadow-lift:0 18px 44px rgba(62,38,14,.16);--radius-card:2px;--font-display:"Chakra Petch","Microsoft YaHei",system-ui,sans-serif;--font-body:"Microsoft YaHei",system-ui,sans-serif;--font-mono:"JetBrains Mono",Consolas,monospace}}
+:root{{--color-primary:#CC8800;--color-primary-ink:#7A5100;--color-secondary:#C55221;--color-secondary-strong:#963B18;--color-success:#16A34A;--color-warning:#D97706;--color-danger:#DC2626;--color-surface:#FFFFFF;--color-surface-cream:#FFF8E8;--color-surface-apricot:#FBE9D8;--color-surface-sand:#F2E6D2;--color-surface-rose:#F7E3DC;--color-canvas:#F4E8D3;--color-cream:#FFF8E8;--color-text:#111827;--color-muted:#594E43;--color-line:#D4C2A8;--color-focus:#1D4ED8;--shadow-card:0 14px 34px rgba(62,38,14,.10);--shadow-lift:0 18px 44px rgba(62,38,14,.16);--radius-card:2px;--font-display:"Chakra Petch","Microsoft YaHei",system-ui,sans-serif;--font-body:"Microsoft YaHei",system-ui,sans-serif;--font-mono:"JetBrains Mono",Consolas,monospace}}
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:var(--color-canvas);color:var(--color-text);font:17px/1.72 var(--font-body);letter-spacing:.01em;background-image:radial-gradient(circle at 8% 8%,rgba(204,136,0,.13),transparent 24rem)}}
 a{{color:var(--color-primary-ink);font-weight:700;text-underline-offset:4px;text-decoration-thickness:2px}}a:hover{{color:var(--color-secondary-strong)}}a:focus-visible{{outline:3px solid var(--color-focus);outline-offset:4px;border-radius:2px}}.skip{{position:absolute;left:-9999px}}.skip:focus{{left:16px;top:16px;background:var(--color-surface);padding:12px 16px;z-index:10;box-shadow:var(--shadow-card)}}
 .compact-editorial{{max-width:1080px;margin:auto;padding:0 32px}}.page-header{{position:relative;padding:88px 0 56px;border-bottom:1px solid var(--color-line)}}.page-header:before{{content:"";position:absolute;inset:0 auto auto 0;width:96px;height:8px;background:var(--color-primary)}}.page-header:after{{content:"VISUAL / BRIEF";position:absolute;right:0;top:32px;color:var(--color-secondary);font:700 12px/1 var(--font-mono);letter-spacing:.14em}}.kicker,.chapter-index{{font:700 12px/1.3 var(--font-mono);color:var(--color-secondary-strong);letter-spacing:.12em;text-transform:uppercase}}
 h1{{max-width:900px;font:800 clamp(3rem,8vw,5.8rem)/.94 var(--font-display);letter-spacing:-.055em;text-wrap:balance;margin:18px 0 28px}}.overview{{max-width:46rem;font-size:1.16rem;line-height:1.8;margin:0 0 24px;color:var(--color-muted)}}.source-link{{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;background:var(--color-secondary);color:#fff;text-decoration:none;box-shadow:5px 5px 0 var(--color-primary)}}.source-link:hover{{background:var(--color-secondary-strong);color:#fff;transform:translate(-1px,-1px);box-shadow:7px 7px 0 var(--color-primary)}}.source-link:active{{transform:translate(2px,2px);box-shadow:3px 3px 0 var(--color-primary)}}
 .insights{{padding:48px 0 64px}}.section-label{{font:700 14px/1.3 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--color-line);padding-bottom:12px}}.insight-grid{{list-style:none;padding:0;margin:24px 0 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}}
 .insight-grid li{{position:relative;background:var(--color-surface);padding:24px;display:grid;grid-template-columns:40px 1fr;gap:12px;border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card);transition:transform .18s ease,box-shadow .18s ease}}.insight-grid li:hover{{transform:translateY(-3px);box-shadow:var(--shadow-lift)}}.insight-grid span{{color:var(--color-secondary-strong);font:700 13px/1.4 var(--font-mono)}}.insight-grid p{{margin:0;font-weight:600}}
-.chapter-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:20px;padding:0 0 72px}}.chapter-card{{min-width:0;background:var(--color-surface);padding:28px;border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card);display:grid;gap:28px;break-inside:avoid;transition:transform .18s ease,box-shadow .18s ease}}.chapter-card:hover{{transform:translateY(-3px);box-shadow:var(--shadow-lift)}}.chapter-copy h2{{font:800 clamp(1.7rem,3vw,2.35rem)/1.08 var(--font-display);letter-spacing:-.03em;text-wrap:balance;overflow-wrap:anywhere;margin:12px 0 20px}}.chapter-summary{{margin:0;color:var(--color-muted)}}
+.chapter-stack{{padding:0 0 72px}}.chapter-section{{min-width:0;padding:56px 0 64px;border-top:1px solid var(--color-line);break-inside:avoid}}.chapter-copy{{max-width:780px;margin-bottom:28px}}.chapter-copy h2{{font:800 clamp(2rem,4vw,3rem)/1.06 var(--font-display);letter-spacing:-.035em;text-wrap:balance;overflow-wrap:anywhere;margin:12px 0 20px}}
 .source-tags{{list-style:none;padding:0;margin:24px 0 0;display:flex;flex-wrap:wrap;gap:8px}}.source-tags li{{font:600 12px/1.4 var(--font-mono);background:var(--color-cream);border:1px solid var(--color-line);padding:7px 10px}}.source-tags span{{color:var(--color-secondary-strong);font-weight:800;margin-right:7px}}
-.chapter-graphics{{display:grid;gap:16px}}.editorial-visual{{margin:0;background:var(--color-cream);color:var(--color-text);padding:22px;border:1px solid var(--color-line);border-top:4px solid var(--color-secondary);box-shadow:none}}figcaption{{font:700 1.08rem/1.4 var(--font-display);margin-bottom:18px}}.diagram-accent{{display:block;width:120px;height:12px;margin-bottom:20px;fill:none;stroke:var(--color-secondary);stroke-width:2}}
+.summary-card-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px}}.summary-card{{--card-surface:var(--color-surface);--card-accent:var(--color-primary);min-width:0;background:var(--card-surface);padding:24px;border-top:6px solid var(--card-accent);box-shadow:var(--shadow-card);break-inside:avoid}}.summary-card:nth-child(4n+1){{--card-surface:var(--color-surface);--card-accent:var(--color-primary)}}.summary-card:nth-child(4n+2){{--card-surface:var(--color-surface-apricot);--card-accent:var(--color-secondary)}}.summary-card:nth-child(4n+3){{--card-surface:var(--color-surface-cream);--card-accent:var(--color-primary)}}.summary-card:nth-child(4n){{--card-surface:var(--color-surface-rose);--card-accent:var(--color-secondary)}}.chapter-section:nth-child(even) .summary-card:nth-child(4n+1){{--card-surface:var(--color-surface-sand)}}.chapter-section:nth-child(even) .summary-card:nth-child(4n+3){{--card-surface:var(--color-surface)}}.summary-card-index{{margin:0 0 10px;color:var(--color-secondary-strong);font:700 12px/1.3 var(--font-mono);letter-spacing:.08em}}.summary-card h3{{margin:0 0 12px;font:800 1.2rem/1.25 var(--font-display);overflow-wrap:anywhere}}.summary-card>p:last-child{{margin:0;color:var(--color-muted)}}
+.chapter-graphics{{display:grid;gap:16px;margin-top:20px}}.editorial-visual{{margin:0;background:var(--color-surface);color:var(--color-text);padding:24px;border:1px solid var(--color-line);border-top:6px solid var(--color-secondary);box-shadow:var(--shadow-card)}}figcaption{{font:700 1.08rem/1.4 var(--font-display);margin-bottom:18px}}.diagram-accent{{display:block;width:120px;height:12px;margin-bottom:20px;fill:none;stroke:var(--color-secondary);stroke-width:2}}
 .flow-diagram{{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}}.diagram-node{{padding:16px;background:var(--color-cream);min-height:96px;display:grid;align-content:space-between;border-bottom:3px solid var(--color-primary)}}.diagram-node span,.layered-diagram span{{font:700 12px/1.3 var(--font-mono);color:var(--color-secondary-strong)}}.diagram-node strong{{font-size:.95rem}}
 .timeline-diagram{{display:grid;gap:0;border-left:4px solid var(--color-primary);margin-left:12px}}.timeline-diagram .diagram-node{{position:relative;background:transparent;min-height:0;padding:11px 14px 11px 24px;border:0}}.timeline-diagram .diagram-node:before{{content:"";position:absolute;width:13px;height:13px;border-radius:50%;background:var(--color-secondary);border:3px solid var(--color-surface);left:-9px;top:18px}}
 .comparison-diagram{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}.comparison-diagram>div{{padding:20px;background:var(--color-cream);display:grid;gap:8px;border-bottom:4px solid var(--color-secondary)}}.comparison-diagram span{{font:700 12px/1.3 var(--font-mono);color:var(--color-primary-ink)}}
@@ -249,11 +306,11 @@ h1{{max-width:900px;font:800 clamp(3rem,8vw,5.8rem)/.94 var(--font-display);lett
 .metrics-diagram{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}}.metrics-diagram>div{{background:var(--color-text);color:#fff;padding:20px;display:grid;border-bottom:6px solid var(--color-primary)}}.metrics-diagram strong{{font:800 2.2rem/1 var(--font-display);color:#FFD58A}}.metrics-diagram span{{font-size:.8rem;margin-top:8px}}
 .layered-diagram{{display:flex;flex-direction:column-reverse;gap:7px}}.layered-diagram>div{{padding:14px 16px;background:var(--color-cream);border-bottom:3px solid var(--color-primary);display:flex;gap:12px;justify-content:center}}.layered-diagram>div:nth-child(2){{margin-inline:7%}}.layered-diagram>div:nth-child(3){{margin-inline:14%}}
 .editorial-text-treatment{{padding:22px;border-left:6px solid var(--color-primary);background:var(--color-cream);color:var(--color-text)}}footer{{padding:40px 0 64px;border-top:1px solid var(--color-line);font:600 12px/1.5 var(--font-mono);color:var(--color-muted);letter-spacing:.04em}}
-@media(max-width:680px){{body{{font-size:16px}}.compact-editorial{{padding:0 18px}}.page-header{{padding:64px 0 42px}}.page-header:after{{top:24px}}h1{{font-size:clamp(2.7rem,15vw,4.2rem);overflow-wrap:anywhere}}.insight-grid,.chapter-grid{{grid-template-columns:1fr}}.chapter-card{{padding:22px;gap:24px}}.comparison-diagram{{grid-template-columns:1fr}}.editorial-visual{{padding:18px}}}}
-@media(hover:none){{.insight-grid li:hover,.chapter-card:hover{{transform:none;box-shadow:var(--shadow-card)}}}}@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}*,*:before,*:after{{scroll-behavior:auto!important;transition:none!important}}}}@media print{{body{{background:#fff;background-image:none}}.compact-editorial{{max-width:none}}.chapter-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}.chapter-card{{box-shadow:none;border:1px solid var(--color-line);border-top:6px solid var(--color-primary)}}}}
+@media(max-width:680px){{body{{font-size:16px}}.compact-editorial{{padding:0 18px}}.page-header{{padding:64px 0 42px}}.page-header:after{{top:24px}}h1{{font-size:clamp(2.7rem,15vw,4.2rem);overflow-wrap:anywhere}}.insight-grid,.summary-card-grid{{grid-template-columns:1fr}}.chapter-section{{padding:44px 0 52px}}.summary-card{{padding:20px}}.comparison-diagram{{grid-template-columns:1fr}}.editorial-visual{{padding:18px}}}}
+@media(hover:none){{.insight-grid li:hover{{transform:none;box-shadow:var(--shadow-card)}}}}@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}*,*:before,*:after{{scroll-behavior:auto!important;transition:none!important}}}}@media print{{body{{background:#fff;background-image:none}}.compact-editorial{{max-width:none}}.summary-card-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}.summary-card,.editorial-visual{{box-shadow:none}}}}
 </style></head><body><a class="skip" href="#content">跳至正文</a><main id="content" class="compact-editorial">
 <header class="page-header"><p class="kicker">TRANSCRIPT INTERPRETATION</p><h1>{title}</h1><p class="overview"{_source_attrs(manifest["overview"])}>{_claim_text(manifest["overview"])}</p>{source_link}</header>
-<section class="insights"><p class="section-label">核心结论</p><ol class="insight-grid">{insights}</ol></section><div class="chapter-grid">{''.join(chapter_html)}</div>
+<section class="insights"><p class="section-label">核心结论</p><ol class="insight-grid">{insights}</ol></section><div class="chapter-stack">{''.join(chapter_html)}</div>
 <footer>基于完整校对转写稿整理 · {len(blocks)} 个来源窗口</footer></main></body></html>'''
 
 

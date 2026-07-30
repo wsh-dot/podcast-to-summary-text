@@ -72,7 +72,7 @@ Bilibili visual media must use pinned BBDown 1.6.3 with `--video-only --video-as
 The regular reader contains overview, core insights, chapter navigation, evidence, six infographic types, and optional representative frames. The compact editorial reader uses an approximately 1080px single-column layout, renderer-owned CSS/SVG graphics, and source-window labels; it contains no search, sticky sidebar, video frames, serialized manifest, or full transcript.
 
 - The visual intent is a warm, confident, modern editorial poster. Use semantic tokens: amber `--color-primary: #CC8800`, burnt orange `--color-secondary: #C55221`, surface `#FFFFFF`, and text `#111827`; body copy must not depend on ad hoc raw colors.
-- The compact profile uses a cream canvas with a two-column grid of white chapter cards. Every card must preserve its number, title, complete summary, source tags, and visuals, with an amber top rule and burnt-orange details; below 680px it becomes one column. The regular reader uses a burnt-orange hero, cream grid canvas, and white navigation/chapter cards. Both profiles share one typography, color, spacing, and focus language.
+- The compact profile uses a cream canvas and distinct SECTION groups. Each chapter keeps its title and source tags above a deterministic 3–5 card split of the complete summary, using semantic sentence boundaries and a two-column white-card grid. Concatenating card bodies in order must reproduce the original summary exactly. Infographics span the full width below the cards; below 680px the content cards become one column. The regular reader uses a burnt-orange hero, cream grid canvas, and white navigation/chapter cards. Both profiles share one typography, color, spacing, and focus language.
 - Display typography prefers Chakra Petch and mono typography prefers JetBrains Mono. Never fetch fonts over the network; use the system fallbacks declared in the embedded CSS.
 - Interactive links, search inputs, and disclosures have a minimum 44px touch target. Links provide default, hover, focus-visible, and active states where relevant; search provides default, hover, and focus-visible states.
 - Escape every untrusted string.
@@ -118,7 +118,7 @@ The prepare stage requires the exact expected batch filename set. Missing, extra
 ## 8. Visual and accessibility QA
 
 - [ ] No horizontal scrolling at 375, 390, 768, 1024, or 1440px; long titles wrap without colliding with decorative copy.
-- [ ] Compact chapters use complete two-column cards and collapse to one column below 680px; titles, summaries, source tags, and visuals are neither truncated, detached, nor omitted.
+- [ ] Each compact chapter summary becomes 3–5 two-column content cards and collapses to one column below 680px; concatenating all card bodies exactly reproduces the original summary, and infographics span the width below.
 - [ ] All six infographic types, text fallback, video frames, navigation, search, and source links use the same semantic tokens.
 - [ ] Tab reaches the skip link, every link, search, and disclosure; focus outlines are at least 3px and never clipped.
 - [ ] Touch targets are at least 44px; `prefers-reduced-motion` removes smooth scrolling and hover transitions.

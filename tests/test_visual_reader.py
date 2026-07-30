@@ -308,8 +308,10 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
             for expected in (
                 "compact-editorial",
                 "insight-grid",
-                "chapter-grid",
-                "chapter-card",
+                "chapter-stack",
+                "chapter-section",
+                "summary-card-grid",
+                "summary-card",
                 "flow-diagram",
                 "timeline-diagram",
                 "comparison-diagram",
@@ -320,15 +322,28 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 "--color-primary:#CC8800",
                 "--color-secondary:#C55221",
                 "--color-focus:#1D4ED8",
+                "--color-surface-apricot:#FBE9D8",
+                "--color-surface-sand:#F2E6D2",
+                "--color-surface-rose:#F7E3DC",
+                ".summary-card:nth-child(4n+2)",
+                ".chapter-section:nth-child(even) .summary-card:nth-child(4n+1)",
                 "grid-template-columns:repeat(2,minmax(0,1fr))",
                 "@media(max-width:680px)",
                 "@media(hover:none)",
                 "min-height:44px",
             ):
                 self.assertIn(expected, page)
-            self.assertEqual(page.count('class="chapter-card"'), len(compact_manifest()["chapters"]))
+            self.assertEqual(page.count('class="chapter-section"'), len(compact_manifest()["chapters"]))
+            expected_card_count = sum(
+                len(visual_reader._summary_card_groups(chapter["summary"]["text"]))
+                for chapter in compact_manifest()["chapters"]
+            )
+            self.assertEqual(page.count('class="summary-card"'), expected_card_count)
             for chapter in compact_manifest()["chapters"]:
-                self.assertIn(chapter["summary"]["text"], page)
+                groups = visual_reader._summary_card_groups(chapter["summary"]["text"])
+                self.assertEqual("".join(groups), chapter["summary"]["text"])
+                for group in groups:
+                    self.assertIn(group, page)
                 for evidence in chapter["evidence"]:
                     self.assertIn(evidence["label"], page)
             for forbidden in (

@@ -88,7 +88,7 @@ Bilibili 视觉源仍只用 BBDown 1.6.3 `--video-only --video-ascending`；不�
 普通 Reader 包含 overview、core insights、章节导航、证据、六类信息图和可选代表帧。compact editorial Reader 使用约 1080px 单栏编辑式布局、renderer-owned CSS/SVG 图形和来源时间窗，不包含搜索、sticky 侧栏、视频帧、序列化 manifest 或完整 transcript。
 
 - 视觉意图是温暖、自信的现代编辑海报。必须使用语义 token：amber `--color-primary: #CC8800`、burnt orange `--color-secondary: #C55221`、surface `#FFFFFF`、text `#111827`；正文不得直接依赖临时 raw color。
-- compact profile 使用奶油色画布与双列白色章节卡片；每张卡片必须完整保留编号、标题、摘要、来源标签和信息图，并使用琥珀顶线与焦橙细节。680px 以下变为单列。普通 Reader 使用焦橙 hero、奶油网格画布、白色导航/章节卡片。两者必须共享字体、色彩、间距和焦点语言。
+- compact profile 使用奶油色画布和独立 SECTION 分组。每章标题与来源标签在上方，完整摘要按语义和句子边界确定性拆为 3–5 张双列白色内容卡片；卡片正文按原顺序拼接后必须逐字等于原摘要。信息图在卡片网格下方占满宽度，680px 以下内容卡片变为单列。普通 Reader 使用焦橙 hero、奶油网格画布、白色导航/章节卡片。两者必须共享字体、色彩、间距和焦点语言。
 - display 字体栈优先 Chakra Petch，mono 优先 JetBrains Mono；不得为了字体发起网络请求，缺失时使用内嵌 CSS 中的系统 fallback。
 - 可交互链接、搜索框和 disclosure 的触控高度至少 44px。链接必须具有 default、hover、focus-visible 和 active（适用时）状态；搜索框必须具有 default、hover、focus-visible 状态。
 - 所有不可信文本统一 HTML escape。
@@ -136,7 +136,7 @@ Bilibili 视觉源仍只用 BBDown 1.6.3 `--video-only --video-ascending`；不�
 ## 8. 视觉与无障碍 QA
 
 - [ ] 375、390、768、1024、1440px 均无横向滚动，长标题可换行且不遮挡装饰文字。
-- [ ] compact 章节使用两列完整卡片，680px 以下单列；标题、摘要、来源标签和信息图没有被截断、拆出卡片或省略。
+- [ ] compact 每章摘要拆为 3–5 张双列内容卡片，680px 以下单列；全部卡片正文按序拼接后逐字等于原摘要，信息图在卡片下方全宽呈现。
 - [ ] 六类图表、无图表文字回退、视频帧、导航、搜索和来源链接使用同一语义 token。
 - [ ] Tab 可到达 skip link、所有链接、搜索与 disclosure；焦点轮廓至少 3px 且不被裁切。
 - [ ] 触控目标至少 44px；`prefers-reduced-motion` 会移除滚动与 hover transition。
