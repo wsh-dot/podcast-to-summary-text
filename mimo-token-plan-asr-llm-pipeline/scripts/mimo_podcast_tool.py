@@ -29,7 +29,7 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -189,6 +189,10 @@ ASR_CHECKPOINT_VERSION = 1
 
 
 class ASRContentBlockedError(RuntimeError):
+    pass
+
+
+class ASRTransportError(RuntimeError):
     pass
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
@@ -603,6 +607,7 @@ def download_audio(url, output_dir, cookie=None, cookies_file=None, cookies_from
     output_template = str(output_dir / "downloaded.%(ext)s")
     command = [
         "yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "0",
+        "--retries", "10", "--fragment-retries", "10", "--socket-timeout", "30",
         "-o", output_template,
     ]
     if cookie:
@@ -1159,6 +1164,7 @@ def persist_successful_asr_credentials(provider):
         provider._credentials_to_persist,
     )
     print(f"ASR 凭据已保存到本机用户配置，后续新对话将自动复用（provider: {provider._credential_provider}）。")
+    provider._credential_source = "cache"
 
 
 def handle_cached_asr_authentication_error(provider, exc):
@@ -1174,6 +1180,19 @@ def handle_cached_asr_authentication_error(provider, exc):
         )
         return True
     return False
+
+
+def handle_asr_authentication_error(provider, exc):
+    if not is_authentication_error(exc):
+        return False
+    if handle_cached_asr_authentication_error(provider, exc):
+        return True
+    provider_name = getattr(provider, "_credential_provider", "当前 provider")
+    print(
+        f"错误: 提供的 {provider_name} ASR 凭据无效或被拒绝，"
+        "该凭据未保存。请提供最新有效的 ASR API Key 后重试。"
+    )
+    return True
 
 
 def create_asr_provider(args):
@@ -1553,6 +1572,22 @@ def _retry_after_seconds(error):
     return seconds if seconds > 0 else None
 
 
+def is_transport_error(exc):
+    if isinstance(exc, (URLError, TimeoutError, ConnectionError)):
+        return True
+    message = str(exc).lower()
+    markers = (
+        "timed out",
+        "timeout",
+        "unexpected_eof",
+        "unexpected eof",
+        "connection reset",
+        "remote end closed",
+        "ssl:",
+    )
+    return any(marker in message for marker in markers)
+
+
 def transcribe_chunk_with_retry(
     asr_provider,
     chunk_path,
@@ -1598,6 +1633,8 @@ def transcribe_chunk_with_retry(
             else:
                 if generic_failures >= MAX_RETRIES - 1:
                     print(f" 失败: {e}")
+                    if is_transport_error(e):
+                        raise ASRTransportError(str(e)) from e
                     raise
                 delay = RETRY_BASE_DELAY * (2 ** generic_failures)
                 generic_failures += 1
@@ -1726,12 +1763,18 @@ def transcribe_audio(
                 window_label,
                 sleep_fn=retry_sleep,
             )
-        except ASRContentBlockedError:
-            fallback_dir = Path(temp_dir) / f"risk_fallback_{i:03d}"
+            persist_successful_asr_credentials(asr_provider)
+        except (ASRContentBlockedError, ASRTransportError) as fallback_error:
+            fallback_dir = Path(temp_dir) / f"asr_fallback_{i:03d}"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             subchunks = chunk_audio(chunk, fallback_dir, segment_minutes=1)
+            fallback_reason = (
+                "risk blocked"
+                if isinstance(fallback_error, ASRContentBlockedError)
+                else "网络传输持续失败"
+            )
             print(
-                f"  窗口 {window_label} 持续 risk blocked，"
+                f"  窗口 {window_label} {fallback_reason}，"
                 f"改用 {len(subchunks)} 个同窗内子片段"
             )
             subtexts = []
@@ -1744,6 +1787,7 @@ def transcribe_audio(
                     f"{window_label} part {subindex}/{len(subchunks)}",
                     sleep_fn=retry_sleep,
                 )
+                persist_successful_asr_credentials(asr_provider)
                 if subtext.strip():
                     subtexts.append(subtext.strip())
             transcript = "\n".join(subtexts)
@@ -3417,7 +3461,7 @@ def main():
                     checkpoint_id=str(args.input),
                 )
             except Exception as exc:
-                if handle_cached_asr_authentication_error(asr_provider, exc):
+                if handle_asr_authentication_error(asr_provider, exc):
                     sys.exit(1)
                 raise
             persist_successful_asr_credentials(asr_provider)

@@ -58,6 +58,7 @@ Provider-specific options:
 
 - HTTP 429 gets up to eight total attempts. Honor a valid `Retry-After`; otherwise back off with a 15, 30, 60, and 120 second cap. Rate limits and ordinary transient errors share the same attempt budget.
 - Retry `risk blocked` quickly on the original chunk. If it persists, split only that three-minute window into up to three one-minute subchunks, then merge them under the original window label.
+- Retry premature TLS EOF, connection reset, and read/write timeout errors on the original chunk. If they persist, use the same one-minute, in-window fallback. Authentication errors and HTTP 429 never enter this fallback.
 - Atomically update `<output>_transcript.asr-checkpoint.json` after every completed window. Resume only after validating the input identity, `segment_minutes`, media duration, and the contiguous completed prefix. Remove the checkpoint only after atomically publishing the final transcript.
 - Checkpoints never contain credentials. Never edit one to bypass mismatch validation, and never use standard API versus Step Plan routing as a rate-limit fallback.
 

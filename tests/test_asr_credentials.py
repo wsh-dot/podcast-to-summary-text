@@ -76,6 +76,49 @@ class ASRCredentialStoreTests(unittest.TestCase):
         self.assertEqual(cached_provider.api_key, "step-secret")
         self.assertEqual(cached_provider._credential_source, "cache")
 
+    def test_first_successful_chunk_persists_before_later_failure(self):
+        provider = tool.StepFunSSEASRProvider(
+            api_key="step-secret",
+            base_url=tool.STEPFUN_BASE_URL,
+            model="stepaudio-2.5-asr",
+        )
+        tool._attach_asr_credential_state(
+            provider,
+            "stepfun",
+            {"api_key": "step-secret"},
+            used_cache=False,
+        )
+
+        chunks = [Path(self.temp_dir.name) / "one.mp3", Path(self.temp_dir.name) / "two.mp3"]
+        for chunk in chunks:
+            chunk.write_bytes(b"audio")
+        calls = 0
+
+        def transcribe(_path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return "first window"
+            raise RuntimeError("later failure")
+
+        provider.transcribe_chunk = transcribe
+        with patch.object(tool, "chunk_audio", return_value=chunks):
+            with self.assertRaisesRegex(RuntimeError, "later failure"):
+                tool.transcribe_audio(
+                    provider,
+                    Path(self.temp_dir.name) / "episode.mp3",
+                    Path(self.temp_dir.name),
+                    segment_minutes=3,
+                    duration_seconds=360,
+                    retry_sleep=lambda _delay: None,
+                )
+
+        self.assertEqual(
+            tool.load_asr_credentials()["stepfun"]["api_key"],
+            "step-secret",
+        )
+        self.assertEqual(provider._credential_source, "cache")
+
     def test_cached_authentication_failure_forgets_only_that_provider(self):
         tool.save_asr_credentials("stepfun", {"api_key": "expired"})
         tool.save_asr_credentials("mimo", {"api_key": "tp-still-valid"})
@@ -148,6 +191,27 @@ class ASRCredentialStoreTests(unittest.TestCase):
 
         self.assertEqual(provider.calls, 1)
         sleep.assert_not_called()
+
+    def test_provided_authentication_failure_is_handled_without_persistence(self):
+        provider = tool.StepFunSSEASRProvider(
+            api_key="rejected",
+            base_url=tool.STEPFUN_BASE_URL,
+            model="stepaudio-2.5-asr",
+        )
+        tool._attach_asr_credential_state(
+            provider,
+            "stepfun",
+            {"api_key": "rejected"},
+            used_cache=False,
+        )
+
+        self.assertTrue(
+            tool.handle_asr_authentication_error(
+                provider,
+                FakeAuthError("unauthorized"),
+            )
+        )
+        self.assertFalse(self.store_path.exists())
 
     def test_forget_removes_last_store_file(self):
         tool.save_asr_credentials("aliyun-qwen", {"api_key": "dashscope-secret"})

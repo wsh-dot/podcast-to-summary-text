@@ -23,7 +23,7 @@
 
 ### 本机持久化
 
-- 显式参数或环境变量提供的 ASR 凭据，在第一次真实 ASR 请求成功后保存；未验证成功的凭据不保存。
+- 显式参数或环境变量提供的 ASR 凭据，在首个真实 ASR 分片成功后立即保存；后续窗口失败不回滚该缓存，未验证成功的凭据不保存。
 - 默认位置：Windows `%APPDATA%\mimo-podcast-tool\asr-credentials.json`，macOS `~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`，Linux `${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`。
 - 可用 `MIMO_PODCAST_CREDENTIALS_FILE` 覆盖位置，主要用于隔离测试。
 - 文件不属于仓库，并尽可能设置为仅当前用户可读写。不得打印、提交或写入报告。

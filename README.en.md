@@ -271,6 +271,6 @@ The self-test does not call any external API.
 
 This release also passed:
 
-- `python -m unittest discover -s tests -v`: 101 tests
-- skill-judge: `116/120 (A)`
+- `python -m unittest discover -s tests -v`: 105 tests
+- skill-judge: `118/120 (A)`
 - SkillOpt held-out gate: `hard=1.0000`, `soft=1.0000` (6/6)

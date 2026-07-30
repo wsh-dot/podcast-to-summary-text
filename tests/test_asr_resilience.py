@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
 SCRIPT_PATH = (
@@ -29,6 +29,25 @@ def load_tool():
 
 
 class ASRResilienceTests(unittest.TestCase):
+    def test_download_audio_configures_network_retries(self):
+        tool = load_tool()
+
+        class Completed:
+            returncode = 0
+            stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "downloaded.mp3").write_bytes(b"audio")
+            with patch.object(tool.subprocess, "run", return_value=Completed()) as run:
+                result = tool.download_audio("https://example.com/episode", root)
+
+        command = run.call_args.args[0]
+        self.assertEqual(result.name, "downloaded.mp3")
+        self.assertIn("--retries", command)
+        self.assertIn("--fragment-retries", command)
+        self.assertIn("--socket-timeout", command)
+
     def test_rate_limit_uses_retry_after_and_more_than_generic_retry_budget(self):
         tool = load_tool()
         calls = 0
@@ -121,6 +140,46 @@ class ASRResilienceTests(unittest.TestCase):
                     segment_minutes=3,
                     duration_seconds=180,
                     retry_sleep=lambda delay: None,
+                )
+
+            blocks = tool.parse_transcript_blocks(transcript)
+            self.assertEqual([block["window"] for block in blocks], ["00:00-00:03"])
+            self.assertEqual(blocks[0]["text"], "text-sub_0\ntext-sub_1\ntext-sub_2")
+            self.assertEqual(provider.calls.count(main_chunk.name), 3)
+
+    def test_persistent_transport_failure_splits_inside_original_window(self):
+        tool = load_tool()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            main_chunk = root / "chunk_000.mp3"
+            subchunks = [root / f"sub_{index}.mp3" for index in range(3)]
+            for path in [main_chunk, *subchunks]:
+                path.write_bytes(b"audio")
+
+            class Provider:
+                def __init__(self):
+                    self.calls = []
+
+                def transcribe_chunk(self, path):
+                    name = Path(path).name
+                    self.calls.append(name)
+                    if name == main_chunk.name:
+                        raise URLError("The write operation timed out")
+                    return f"text-{Path(path).stem}"
+
+            provider = Provider()
+            with patch.object(
+                tool,
+                "chunk_audio",
+                side_effect=[[main_chunk], subchunks],
+            ):
+                transcript = tool.transcribe_audio(
+                    provider,
+                    root / "episode.m4a",
+                    root,
+                    segment_minutes=3,
+                    duration_seconds=180,
+                    retry_sleep=lambda _delay: None,
                 )
 
             blocks = tool.parse_transcript_blocks(transcript)

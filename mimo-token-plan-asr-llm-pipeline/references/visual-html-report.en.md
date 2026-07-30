@@ -9,6 +9,7 @@
 5. Reader and offline contract
 6. Failure matrix
 7. Manual file layout
+8. Visual and accessibility QA
 
 ## 1. Fact and artifact order
 
@@ -70,6 +71,10 @@ Bilibili visual media must use pinned BBDown 1.6.3 with `--video-only --video-as
 
 The regular reader contains overview, core insights, chapter navigation, evidence, six infographic types, and optional representative frames. The compact editorial reader uses an approximately 1080px single-column layout, renderer-owned CSS/SVG graphics, and source-window labels; it contains no search, sticky sidebar, video frames, serialized manifest, or full transcript.
 
+- The visual intent is a warm, confident, modern editorial poster. Use semantic tokens: amber `--color-primary: #CC8800`, burnt orange `--color-secondary: #C55221`, surface `#FFFFFF`, and text `#111827`; body copy must not depend on ad hoc raw colors.
+- The compact profile uses a cream canvas with alternating burnt-orange chapters. The regular reader uses a burnt-orange hero, cream grid canvas, and white navigation/chapter cards. Both profiles share one typography, color, spacing, and focus language.
+- Display typography prefers Chakra Petch and mono typography prefers JetBrains Mono. Never fetch fonts over the network; use the system fallbacks declared in the embedded CSS.
+- Interactive links, search inputs, and disclosures have a minimum 44px touch target. Links provide default, hover, focus-visible, and active states where relevant; search provides default, hover, and focus-visible states.
 - Escape every untrusted string.
 - Generate image paths inside the sibling assets directory only.
 - Images need width/height, stable aspect ratio, lazy loading, async decoding, alt text, and captions.
@@ -79,6 +84,7 @@ The regular reader contains overview, core insights, chapter navigation, evidenc
 - Without JavaScript, text, anchors, visuals, and images remain available.
 - Use a single column with mobile chapter disclosure at 375/768 and the three-column reader at 1024/1440.
 - Include skip navigation, visible focus, sequential headings, reduced motion, and print expansion.
+- Prohibit low-contrast small amber text, missing focus outlines, decorative gradient overload, indiscriminate pill shapes, inconsistent card spacing, and hover-only information.
 
 ## 6. Failure matrix
 
@@ -108,3 +114,13 @@ Errors must not expose credentials, cookies, or transcript content.
 ```
 
 The prepare stage requires the exact expected batch filename set. Missing, extra, duplicate, or malformed files never enter synthesis. The render stage reads only `manifest.json`, validates through the shared contract, and publishes the same reader as API mode.
+
+## 8. Visual and accessibility QA
+
+- [ ] No horizontal scrolling at 375, 390, 768, 1024, or 1440px; long titles wrap without colliding with decorative copy.
+- [ ] Compact cream/burnt-orange chapter alternation is present; body text on burnt orange remains clearly legible in white.
+- [ ] All six infographic types, text fallback, video frames, navigation, search, and source links use the same semantic tokens.
+- [ ] Tab reaches the skip link, every link, search, and disclosure; focus outlines are at least 3px and never clipped.
+- [ ] Touch targets are at least 44px; `prefers-reduced-motion` removes smooth scrolling and hover transitions.
+- [ ] Print removes background texture, sticky navigation, and scripts while avoiding unnecessary chapter splits.
+- [ ] The HTML preserves the single-file/sibling-assets contract and contains no remote fonts, CDN, remote images, or tracking.

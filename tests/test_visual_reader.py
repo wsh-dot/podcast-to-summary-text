@@ -278,6 +278,12 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
             self.assertIn("<symbol", html)
             self.assertIn('type="search"', html)
             self.assertIn('data-source-windows="00:00-00:30 00:30-01:00"', html)
+            self.assertIn("--color-primary:#CC8800", html)
+            self.assertIn("--color-secondary:#C55221", html)
+            self.assertIn("--color-focus:#1D4ED8", html)
+            self.assertIn('var(--font-display)', html)
+            self.assertIn("input[type=search]:hover", html)
+            self.assertIn("min-height:44px", html)
             self.assertNotIn("{&#x27;text&#x27;", html)
             self.assertNotIn("<link rel=", html)
             self.assertNotIn("src=\"http", html)
@@ -310,6 +316,12 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 "layered-diagram",
                 "metrics-diagram",
                 "<svg",
+                "--color-primary:#CC8800",
+                "--color-secondary:#C55221",
+                "--color-focus:#1D4ED8",
+                "chapter-band:nth-of-type(2n+3)",
+                "@media(hover:none)",
+                "min-height:44px",
             ):
                 self.assertIn(expected, page)
             for forbidden in (

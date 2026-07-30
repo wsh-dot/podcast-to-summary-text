@@ -23,7 +23,7 @@ Do not put vendor-specific request payloads inside the report engine.
 
 ### Local persistence
 
-- Credentials supplied through CLI arguments or environment variables are saved only after a real ASR operation succeeds; unverified credentials are never saved.
+- Credentials supplied through CLI arguments or environment variables are saved immediately after the first real ASR chunk succeeds. A later-window failure does not roll back that cache; unverified credentials are never saved.
 - Default location: Windows `%APPDATA%\mimo-podcast-tool\asr-credentials.json`, macOS `~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`, Linux `${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`.
 - `MIMO_PODCAST_CREDENTIALS_FILE` overrides the location, primarily for isolated tests.
 - Explicit arguments/environment variables take precedence over the cache. A newly verified credential replaces the cached value for that provider.
