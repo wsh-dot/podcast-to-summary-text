@@ -216,3 +216,17 @@ cmd /c "set MIMO_API_KEY=tp-xxxx && python script.py"
 # 方案 3：使用 PowerShell
 $env:MIMO_API_KEY="tp-xxxx"; python script.py
 ```
+
+### ASR Key 本机缓存
+
+第一次通过 `--api-key`、`--asr-api-key` 或环境变量提供 MiMo ASR Key 后，脚本仅在真实 ASR 请求成功时把它保存到本机用户配置。后续新对话可省略 Key：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only
+```
+
+缓存 Key 若返回 401/403 或明确认证失败，会被自动删除并要求提供新 Key。404 表示端点错误、429 表示限流，均不会删除缓存。主动清除可运行：
+
+```bash
+python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider mimo
+```

@@ -72,7 +72,7 @@ mimo-token-plan-asr-llm-pipeline/
 
 这个 skill 把 ASR 转写、LLM 校对和 LLM 总结拆开处理。ASR 原始文本通常没有标点、错别字多、英文术语和人名公司名容易识别错，所以默认先让 LLM 校对，再让 LLM 总结。
 
-如果从音频、视频或 URL 开始，必须提供 ASR 凭证。LLM API 凭证不是必须的。
+如果从音频、视频或 URL 开始，必须能解析出有效 ASR 凭证。脚本按“显式参数、环境变量、本机缓存”的顺序查找；三者都没有时才需要用户提供。LLM API 凭证不是必须的。
 
 Agent 在任务开始时应该一个问题一个问题地询问：
 
@@ -184,6 +184,28 @@ pip install tencentcloud-sdk-python
 
 不要提交 API key、cookies、浏览器 profile 或导出的凭证文件。
 
+### ASR 凭据跨对话保存
+
+第一次通过参数或环境变量提供 ASR 凭据后，脚本只在真实 ASR 转写成功时将它保存到本机用户配置。以后即使新建对话，也可以省略凭据参数：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-xxxx"
+# 后续新对话
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only
+```
+
+默认保存位置：
+
+- Windows：`%APPDATA%\mimo-podcast-tool\asr-credentials.json`
+- macOS：`~/Library/Application Support/mimo-podcast-tool/asr-credentials.json`
+- Linux：`${XDG_CONFIG_HOME:-~/.config}/mimo-podcast-tool/asr-credentials.json`
+
+缓存凭据收到 401/403 或明确认证失败时，只删除对应 provider 的缓存，并要求提供最新凭据。429 限流、网络错误或服务端错误不会清除缓存。主动清除：
+
+```bash
+python scripts/mimo_podcast_tool.py --forget-asr-credentials --asr-provider mimo
+```
+
 ## 常用命令
 
 进入 skill 目录：
@@ -253,3 +275,9 @@ python scripts/mimo_podcast_tool.py --help
 ```
 
 `--self-test` 不会调用任何外部 API。
+
+当前发布还通过了：
+
+- `python -m unittest discover -s tests -v`：101 个测试
+- skill-judge：`116/120（A）`
+- SkillOpt held-out gate：`hard=1.0000`、`soft=1.0000`（6/6）

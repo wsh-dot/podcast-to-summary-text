@@ -22,12 +22,14 @@ description: Use when a user needs 播客或长音视频转写、校对、总结
 
 每轮最多询问一个选择。用户只要求转写或 Markdown 时跳过视觉决策。StepFun 必须明确普通计费还是 Step Plan；两者不得自动互相回退。用户只提供 ASR key 时不得推断其同意 LLM API，时间线路线使用 `ide-agent`。
 
+ASR 凭据按显式参数、环境变量、本机 provider 缓存的顺序解析；三者都没有时才向用户索取。新凭据仅在真实 ASR 成功后保存，后续新对话自动复用。缓存凭据遇到 401/403 或明确认证失败时，只删除该 provider 的缓存并重新向用户索取最新凭据；429、网络错误或服务端错误不得清除。凭据不得出现在回复、报告、日志示例或仓库文件中。存储位置、优先级和主动清除见 `references/providers.md`。
+
 ## 输入路由
 
 | 输入 | 路由 |
 |---|---|
-| 本地音频 | 选定 ASR 后直接窗口化转写。 |
-| 本地视频 | 保留原视频供 Markdown 后置帧提取；音轨仍先由 FFmpeg 提取后进入 ASR。 |
+| 本地音频 | 解析有效 ASR 凭据（含本机缓存）后直接窗口化转写。 |
+| 本地视频 | 解析有效 ASR 凭据（含本机缓存）；保留原视频供 Markdown 后置帧提取，音轨仍先由 FFmpeg 提取后进入 ASR。 |
 | Bilibili 子域或 `b23.tv` | 音频和 best-effort 视觉源都只用 BBDown 1.6.3；需要登录态时传 cookie。 |
 | 其他 HTTP/HTTPS URL | 音频用 yt-dlp；视频视觉源 best-effort 请求不高于 720p。 |
 | 窗口化 `.txt` | `--transcript-input`，跳过下载和 ASR；`*_校对.txt` / `*_calibrated.txt` 默认不重复校对。 |
@@ -54,7 +56,7 @@ python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider s
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider stepfun --stepfun-plan --asr-api-key "..."
 ```
 
-凭据只通过参数或环境变量传入。不要写进 prompt 文件、报告、示例、日志或仓库。
+首次可通过参数或环境变量传入凭据；真实 ASR 成功后保存到本机用户配置，后续可省略。不要写进 prompt 文件、报告、示例、日志或仓库。
 
 长音频转写会在输出目录维护与最终转写同名的 ASR checkpoint，并在每个完整窗口后原子写入。重跑相同输入、分片时长和媒体时长时自动跳过已完成的连续前缀；最终转写发布成功后删除 checkpoint。HTTP 429 会遵循 `Retry-After` 并扩大退避预算；StepFun 持续返回 `risk blocked` 时，只在原 3 分钟窗口内部拆成 1 分钟子片段，合并结果仍保留原窗口标签。
 
