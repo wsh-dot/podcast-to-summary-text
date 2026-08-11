@@ -72,6 +72,11 @@ ASR_PROVIDER_DEFAULTS = {
         "model": "qwen3-asr-flash",
         "api_envs": ("DASHSCOPE_API_KEY", "ALIYUN_API_KEY"),
     },
+    "aliyun-funasr-flash": {
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "model": "fun-asr-flash-2026-06-15",
+        "api_envs": ("DASHSCOPE_API_KEY", "ALIYUN_API_KEY"),
+    },
     "stepfun": {
         "base_url": STEPFUN_BASE_URL,
         "plan_base_url": STEPFUN_PLAN_BASE_URL,
@@ -823,6 +828,66 @@ class AliyunQwenASRProvider(BaseASRProvider):
         return response.choices[0].message.content or ""
 
 
+class AliyunFunASRFlashProvider(BaseASRProvider):
+    """DashScope native HTTP adapter for synchronous Fun-ASR-Flash models."""
+
+    name = "aliyun-funasr-flash"
+    endpoint_suffix = "/services/aigc/multimodal-generation/generation"
+
+    def __init__(self, api_key, base_url, model, timeout=120, opener=urlopen):
+        self.api_key = api_key
+        normalized_base_url = base_url.rstrip("/")
+        self.endpoint = (
+            normalized_base_url
+            if normalized_base_url.endswith(self.endpoint_suffix)
+            else f"{normalized_base_url}{self.endpoint_suffix}"
+        )
+        self.model = model
+        self.timeout = timeout
+        self.opener = opener
+
+    def transcribe_chunk(self, chunk_path):
+        audio_b64 = base64.b64encode(Path(chunk_path).read_bytes()).decode("ascii")
+        payload = {
+            "model": self.model,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": f"data:audio/mpeg;base64,{audio_b64}",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            "parameters": {"format": "mp3"},
+        }
+        request = Request(
+            self.endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-SSE": "disable",
+            },
+            method="POST",
+        )
+        with self.opener(request, timeout=self.timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        text = result.get("output", {}).get("text")
+        if not isinstance(text, str):
+            request_id = result.get("request_id", "unknown")
+            raise RuntimeError(
+                f"Fun-ASR-Flash 响应缺少 output.text（request_id: {request_id}）"
+            )
+        return text
+
+
 class StepFunSSEASRProvider(BaseASRProvider):
     """StepFun HTTP + SSE adapter for standard and Step Plan ASR paths."""
 
@@ -1234,6 +1299,22 @@ def create_asr_provider(args):
             used_cache,
         )
 
+    if provider == "aliyun-funasr-flash":
+        provided_key = args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider)
+        used_cache = not provided_key and bool(cached.get("api_key"))
+        api_key = require_value(
+            provided_key or cached.get("api_key"),
+            "阿里 Fun-ASR-Flash 需要 --asr-api-key、环境变量，或已保存的本机凭据。",
+        )
+        base_url = args.asr_base_url or provider_default(ASR_PROVIDER_DEFAULTS, provider, "base_url")
+        model = args.asr_model or provider_default(ASR_PROVIDER_DEFAULTS, provider, "model")
+        return _attach_asr_credential_state(
+            AliyunFunASRFlashProvider(api_key=api_key, base_url=base_url, model=model),
+            provider,
+            {"api_key": api_key},
+            used_cache,
+        )
+
     if provider == "stepfun":
         provided_key = args.asr_api_key or provider_env(ASR_PROVIDER_DEFAULTS, provider)
         used_cache = not provided_key and bool(cached.get("api_key"))
@@ -1336,7 +1417,7 @@ def validate_provider_defaults():
             if not values.get(key):
                 raise AssertionError(f"LLM provider {provider} missing {key}")
 
-    for provider in ("mimo", "aliyun-qwen"):
+    for provider in ("mimo", "aliyun-qwen", "aliyun-funasr-flash"):
         values = ASR_PROVIDER_DEFAULTS[provider]
         for key in ("base_url", "model", "api_envs"):
             if not values.get(key):
@@ -2962,6 +3043,9 @@ def parse_args():
   # 阿里 Qwen ASR 转写，后续由当前 IDE/Agent 模型总结
   python mimo_podcast_tool.py podcast.mp3 --transcribe-only --asr-provider aliyun-qwen --asr-api-key "sk-..."
 
+  # 阿里 Fun-ASR-Flash 同步转写（单片最长 5 分钟，工具默认按 3 分钟分片）
+  python mimo_podcast_tool.py podcast.mp3 --transcribe-only --asr-provider aliyun-funasr-flash --asr-api-key "sk-..."
+
   # 阶跃星辰 Step Plan ASR 转写（订阅额度使用专属 /step_plan/v1 路径）
   python mimo_podcast_tool.py podcast.mp3 --transcribe-only --asr-provider stepfun --stepfun-plan --asr-api-key "..."
 
@@ -3080,9 +3164,9 @@ def parse_args():
     )
     parser.add_argument(
         "--asr-provider",
-        choices=["mimo", "aliyun-qwen", "stepfun", "tencent"],
+        choices=["mimo", "aliyun-qwen", "aliyun-funasr-flash", "stepfun", "tencent"],
         default="mimo",
-        help="ASR provider（默认: mimo；可选 aliyun-qwen、stepfun、tencent）",
+        help="ASR provider（默认: mimo；可选 aliyun-qwen、aliyun-funasr-flash、stepfun、tencent）",
     )
     parser.add_argument(
         "--forget-asr-credentials",
@@ -3466,12 +3550,11 @@ def main():
                 raise
             persist_successful_asr_credentials(asr_provider)
 
-            if args.save_transcript or args.transcribe_only or args.export_ide_prompts:
-                transcript_path = output_dir / f"{base_name}_转写.txt"
-                _atomic_write_text(transcript_path, transcript)
-                if asr_checkpoint_path.exists():
-                    asr_checkpoint_path.unlink()
-                print(f"转写文本已保存: {transcript_path}")
+            transcript_path = output_dir / f"{base_name}_转写.txt"
+            _atomic_write_text(transcript_path, transcript)
+            if asr_checkpoint_path.exists():
+                asr_checkpoint_path.unlink()
+            print(f"转写文本已保存: {transcript_path}")
 
         metadata = build_metadata(args, base_name, duration_seconds)
         input_is_calibrated = bool(
@@ -3639,10 +3722,11 @@ def main():
         report_path = output_dir / f"{base_name}_{report_suffix}.md"
         report_path.write_text(report, encoding="utf-8")
         print(f"报告已保存: {report_path}")
+        pipeline_complete = True
         if args.report_style == "timeline" and visual_llm_provider is not None:
             media_source = visual_media_source(args)
             frame_provider = create_frame_provider(args, temp_dir, media_source)
-            attempt_api_visual_brief(
+            visual_result = attempt_api_visual_brief(
                 llm_provider=visual_llm_provider,
                 transcript_blocks=parse_transcript_blocks(transcript),
                 report=report,
@@ -3654,6 +3738,8 @@ def main():
                 concurrency=args.llm_concurrency,
                 frame_provider=frame_provider,
             )
+            if visual_result is None:
+                pipeline_complete = False
         elif args.report_style == "timeline" and args.manual_sections_dir:
             try:
                 prompt_root = export_visual_prompts(
@@ -3666,16 +3752,20 @@ def main():
                 )
                 print(f"Visual prompts exported: {prompt_root}")
                 print("Save JSON-only batch results, then run prepare and manual render stages.")
+                pipeline_complete = False
             except Exception as exc:
                 print(
                     f"Warning: visual prompt stage failed: {exc}. "
                     f"Retained Markdown: {report_path}"
                 )
+                pipeline_complete = False
         elapsed = time.time() - start_time
-        print("\n=== 完成 ===")
+        print("\n=== 完成 ===" if pipeline_complete else "\n=== 中间状态：HTML 待生成 ===")
         print(f"总耗时: {elapsed:.1f} 秒")
         print(f"转写文本: {len(transcript)} 字符")
         print(f"报告: {len(report)} 字符")
+        if not pipeline_complete:
+            print("TXT 与 Markdown 已保留；生成并校验 HTML 后才能完成默认三产物任务。")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

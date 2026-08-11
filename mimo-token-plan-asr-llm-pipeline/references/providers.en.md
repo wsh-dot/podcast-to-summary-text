@@ -36,6 +36,7 @@ ASR credential matrix:
 |---|---|
 | MiMo ASR | `--api-key`, `--asr-api-key`, or `MIMO_API_KEY` |
 | Alibaba Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` |
+| Alibaba Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash --asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` |
 | StepFun ASR | `--asr-provider stepfun --asr-api-key`, `STEPFUN_API_KEY`, or `STEP_API_KEY`; add `--stepfun-plan` for subscription credits |
 | Tencent ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key`, or Tencent environment variables |
 | Existing transcript | No ASR API credential; use `--transcript-input` |
@@ -46,6 +47,7 @@ ASR credential matrix:
 |---|---|---|---|---|
 | MiMo Token Plan | `--asr-provider mimo` | `--api-key`, `--asr-api-key`, or `MIMO_API_KEY` | `https://token-plan-sgp.xiaomimimo.com/v1`, `mimo-v2.5-asr` | Uses `/chat/completions` with `input_audio`; never use `/audio/transcriptions`. |
 | Alibaba Qwen ASR | `--asr-provider aliyun-qwen` | `--asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1`, `qwen3-asr-flash` | Uses OpenAI-compatible chat with `input_audio`. Verify model availability in the user's region/account. |
+| Alibaba Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash` | `--asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` | `https://dashscope.aliyuncs.com/api/v1`, `fun-asr-flash-2026-06-15` | Uses the native non-streaming `multimodal-generation` HTTP API. The default 3-minute chunks stay below the model's 5-minute limit. Workspace-specific hosts may be set with `--asr-base-url` pointing to `/api/v1`. |
 | StepFun | `--asr-provider stepfun` | `--asr-api-key`, `STEPFUN_API_KEY`, or `STEP_API_KEY` | Standard: `https://api.stepfun.com/v1`; Step Plan: `https://api.stepfun.com/step_plan/v1`; `stepaudio-2.5-asr` | HTTP + SSE. Step Plan requires explicit `--stepfun-plan`; never fall back to the standard billing path. See `stepfun-asr.en.md`. |
 | Tencent Cloud ASR | `--asr-provider tencent` | `--tencent-secret-id`, `--tencent-secret-key`, or Tencent env vars | region `ap-guangzhou`, engine `16k_zh` | Uses Tencent Cloud recording-recognition task polling. Requires `tencentcloud-sdk-python`. |
 

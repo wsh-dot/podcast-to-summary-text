@@ -15,7 +15,9 @@ The root documentation files are for GitHub only. Do not copy them into the skil
 
 ## What This Skill Does
 
-This skill helps an AI coding agent turn podcasts, videos, URLs, or existing transcripts into timestamped deep-summary Markdown reports.
+This skill helps an AI coding agent turn podcasts, videos, URLs, or existing transcripts into a transcript, a timestamped deep-summary Markdown report, and a fully offline HTML visual brief.
+
+By default, an audio or video run must deliver all three artifacts: `<base>_转写.txt`, `<base>_逐窗口深度解读.md`, and `<base>_图文速览.html`. The bundle is reduced to a transcript only when the user explicitly asks for transcription without summary.
 
 It is designed for long-form audio and video content. The final report contains:
 
@@ -26,6 +28,8 @@ It is designed for long-form audio and video content. The final report contains:
 - short direct quotes only when supported by transcript text
 - a transcription note
 - a final core ideas table for quick scanning
+- a VisualBriefManifest v2 HTML interpretation with a one-line overview, core insights, developer takeaways, critical thinking, and further questions
+- developer takeaways covering RAG/context engineering, model training/data, Agent construction/reliability, and an Agent-development learning path
 
 The default report style is a strict timeline report:
 
@@ -171,6 +175,7 @@ Choose one ASR source:
 |---|---|
 | MiMo ASR | `--api-key`, `--asr-api-key`, or `MIMO_API_KEY` |
 | Alibaba Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` |
+| Alibaba Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash --asr-api-key`, `DASHSCOPE_API_KEY`, or `ALIYUN_API_KEY` |
 | StepFun ASR | `--asr-provider stepfun --asr-api-key`, `STEPFUN_API_KEY`, or `STEP_API_KEY`; add `--stepfun-plan` for Step Plan credits |
 | Tencent ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key` |
 | Existing transcript | No ASR API credential; use `--transcript-input` |
@@ -221,6 +226,15 @@ python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider a
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
+Alibaba Fun-ASR-Flash, then IDE/Agent proofreading and summary:
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-funasr-flash --asr-api-key "sk-xxxx"
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
+```
+
+The default model is `fun-asr-flash-2026-06-15`, called through DashScope's native non-streaming `multimodal-generation` API. Default 3-minute chunks stay below the model's 5-minute limit.
+
 StepFun StepAudio 2.5 ASR using Step Plan subscription credits:
 
 ```bash
@@ -263,7 +277,7 @@ Run:
 
 ```bash
 python scripts/mimo_podcast_tool.py --self-test
-python -m py_compile scripts/mimo_podcast_tool.py
+python -m compileall -q scripts
 python scripts/mimo_podcast_tool.py --help
 ```
 
@@ -271,6 +285,6 @@ The self-test does not call any external API.
 
 This release also passed:
 
-- `python -m unittest discover -s tests -v`: 105 tests
-- skill-judge: `118/120 (A)`
-- SkillOpt held-out gate: `hard=1.0000`, `soft=1.0000` (6/6)
+- `python -m unittest discover -s tests -v`: 114 tests
+- skill-judge: `116/120 (A)`
+- SkillOpt skillquality gate: `hard=1.0000`, `soft=1.0000` (17/17)

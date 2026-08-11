@@ -12,13 +12,21 @@ ALLOWED_VISUAL_TYPES = {
     "quote",
 }
 WINDOW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
-MANIFEST_KEYS = {"version", "overview", "core_insights", "chapters"}
+MANIFEST_V1_KEYS = {"version", "overview", "core_insights", "chapters"}
+MANIFEST_V2_KEYS = MANIFEST_V1_KEYS | {
+    "one_line_overview",
+    "developer_takeaways",
+    "critical_thinking",
+    "further_questions",
+}
 CHAPTER_KEYS = {
-    "id", "title", "summary", "source_windows", "evidence", "visuals", "frame_priority"
+    "id", "title", "summary", "summary_cards", "source_windows", "evidence", "visuals", "frame_priority"
 }
 CHAPTER_REQUIRED_KEYS = {"id", "title", "summary", "source_windows", "evidence", "visuals"}
 EVIDENCE_KEYS = {"window", "label"}
 SOURCED_TEXT_KEYS = {"text", "source_windows"}
+SUMMARY_CARD_KEYS = {"title", "text"}
+INTERPRETATION_ITEM_KEYS = {"title", "text", "source_windows"}
 VISUAL_KEYS = {
     "process": {"type", "title", "items"},
     "comparison": {"type", "title", "items"},
@@ -92,6 +100,66 @@ def _validate_sourced_text(value, allowed_windows, label):
     _require_text(value["text"], f"{label} text")
     _validate_source_windows(value["source_windows"], allowed_windows, f"{label} source windows")
     return value
+
+
+def _normalize_card_copy(value):
+    return re.sub(r"[\s，,。；;：:！？!?]+", "", value).casefold()
+
+
+def _validate_summary_cards(cards, chapter_summary, chapter_windows, label):
+    cards = _require_list(cards, label)
+    if not 3 <= len(cards) <= 5:
+        raise ManifestValidationError(f"{label} must contain 3-5 cards")
+    body_parts = []
+    for index, card in enumerate(cards):
+        card_label = f"{label} {index + 1}"
+        card = _require_mapping(card, card_label)
+        _require_exact_keys(card, SUMMARY_CARD_KEYS, SUMMARY_CARD_KEYS, card_label)
+        title = _validate_sourced_text(card["title"], chapter_windows, f"{card_label} title")
+        body = _validate_sourced_text(card["text"], chapter_windows, f"{card_label} text")
+        title_text = title["text"].strip()
+        body_text = body["text"]
+        if not 4 <= len(title_text) <= 24:
+            raise ManifestValidationError(f"{card_label} title must contain 4-24 characters")
+        normalized_title = _normalize_card_copy(title_text)
+        normalized_body = _normalize_card_copy(body_text)
+        if normalized_title == normalized_body or normalized_body.startswith(normalized_title):
+            raise ManifestValidationError(
+                f"{card_label} title must interpret the body instead of repeating its opening"
+            )
+        body_parts.append(body_text)
+    if "".join(body_parts) != chapter_summary["text"]:
+        raise ManifestValidationError(f"{label} text must exactly reconstruct chapter summary")
+    return cards
+
+
+def _validate_interpretation_items(value, allowed_windows, label, minimum, maximum):
+    items = _require_list(value, label)
+    if not minimum <= len(items) <= maximum:
+        raise ManifestValidationError(
+            f"{label} must contain {minimum}-{maximum} items"
+        )
+    for index, item in enumerate(items):
+        item_label = f"{label} {index + 1}"
+        item = _require_mapping(item, item_label)
+        _require_exact_keys(
+            item,
+            INTERPRETATION_ITEM_KEYS,
+            INTERPRETATION_ITEM_KEYS,
+            item_label,
+        )
+        title = _require_text(item["title"], f"{item_label} title").strip()
+        _require_text(item["text"], f"{item_label} text")
+        _validate_source_windows(
+            item["source_windows"],
+            allowed_windows,
+            f"{item_label} source windows",
+        )
+        if not 3 <= len(title) <= 32:
+            raise ManifestValidationError(
+                f"{item_label} title must contain 3-32 characters"
+            )
+    return items
 
 
 def _window_start(window):
@@ -189,13 +257,44 @@ def validate_visual_brief(transcript_blocks, manifest, media_source):
     blocks = _validate_blocks(transcript_blocks)
     validate_media_source(media_source)
     manifest = _require_mapping(manifest, "manifest")
-    _require_exact_keys(manifest, MANIFEST_KEYS, MANIFEST_KEYS, "manifest")
-    if manifest["version"] != 1:
-        raise ManifestValidationError("manifest version must be 1")
+    version = manifest.get("version")
+    if version not in {1, 2}:
+        raise ManifestValidationError("manifest version must be 1 or 2")
+    manifest_keys = MANIFEST_V2_KEYS if version == 2 else MANIFEST_V1_KEYS
+    _require_exact_keys(manifest, manifest_keys, manifest_keys, "manifest")
     expected_windows = [block.window for block in blocks]
     _validate_sourced_text(manifest["overview"], expected_windows, "manifest overview")
     for index, insight in enumerate(_require_list(manifest["core_insights"], "core insights")):
         _validate_sourced_text(insight, expected_windows, f"core insight {index + 1}")
+    if version == 2:
+        one_line = _validate_sourced_text(
+            manifest["one_line_overview"], expected_windows, "one-line overview"
+        )
+        if len(one_line["text"].strip()) > 50:
+            raise ManifestValidationError(
+                "one-line overview must contain at most 50 characters"
+            )
+        _validate_interpretation_items(
+            manifest["developer_takeaways"],
+            expected_windows,
+            "developer takeaways",
+            4,
+            5,
+        )
+        _validate_interpretation_items(
+            manifest["critical_thinking"],
+            expected_windows,
+            "critical thinking",
+            2,
+            4,
+        )
+        _validate_interpretation_items(
+            manifest["further_questions"],
+            expected_windows,
+            "further questions",
+            2,
+            4,
+        )
 
     block_by_window = {block.window: block for block in blocks}
     mapped_windows = []
@@ -222,7 +321,11 @@ def validate_visual_brief(transcript_blocks, manifest, media_source):
             raise ManifestValidationError(f"{label} source windows must be adjacent and ordered")
         mapped_windows.extend(chapter_windows)
         _validate_sourced_text(chapter["title"], chapter_windows, f"{label} title")
-        _validate_sourced_text(chapter["summary"], chapter_windows, f"{label} summary")
+        summary = _validate_sourced_text(chapter["summary"], chapter_windows, f"{label} summary")
+        if "summary_cards" in chapter:
+            _validate_summary_cards(
+                chapter["summary_cards"], summary, chapter_windows, f"{label} summary cards"
+            )
 
         for evidence_index, evidence in enumerate(_require_list(chapter["evidence"], f"{label} evidence")):
             evidence_label = f"{label} evidence {evidence_index + 1}"

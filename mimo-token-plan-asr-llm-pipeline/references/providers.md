@@ -37,6 +37,7 @@ ASR 凭证矩阵：
 |---|---|
 | MiMo ASR | `--api-key`、`--asr-api-key` 或 `MIMO_API_KEY` |
 | 阿里 Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` |
+| 阿里 Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash --asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` |
 | 阶跃星辰 ASR | `--asr-provider stepfun --asr-api-key`、`STEPFUN_API_KEY` 或 `STEP_API_KEY`；订阅额度另加 `--stepfun-plan` |
 | 腾讯 ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key`，或腾讯环境变量 |
 | 已有 transcript | 不需要 ASR API 凭证；使用 `--transcript-input` |
@@ -47,6 +48,7 @@ ASR 凭证矩阵：
 |---|---|---|---|---|
 | MiMo Token Plan | `--asr-provider mimo` | `--api-key`、`--asr-api-key` 或 `MIMO_API_KEY` | `https://token-plan-sgp.xiaomimimo.com/v1`，`mimo-v2.5-asr` | 使用带 `input_audio` 的 `/chat/completions`；不要调用 `/audio/transcriptions`。 |
 | 阿里 Qwen ASR | `--asr-provider aliyun-qwen` | `--asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1`，`qwen3-asr-flash` | 使用 OpenAI-compatible chat 和 `input_audio`。需要确认用户账号/地域可用该模型。 |
+| 阿里 Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash` | `--asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` | `https://dashscope.aliyuncs.com/api/v1`，`fun-asr-flash-2026-06-15` | 使用原生 multimodal-generation HTTP 非流式接口；默认 3 分钟分片低于模型 5 分钟上限。业务空间专属域名可通过 `--asr-base-url` 指向其 `/api/v1`。 |
 | 阶跃星辰 | `--asr-provider stepfun` | `--asr-api-key`、`STEPFUN_API_KEY` 或 `STEP_API_KEY` | 普通：`https://api.stepfun.com/v1`；Step Plan：`https://api.stepfun.com/step_plan/v1`；`stepaudio-2.5-asr` | HTTP + SSE。Step Plan 必须显式加 `--stepfun-plan`，不得回退到普通路径。详见 `stepfun-asr.md`。 |
 | 腾讯云 ASR | `--asr-provider tencent` | `--tencent-secret-id`、`--tencent-secret-key` 或腾讯环境变量 | region `ap-guangzhou`，engine `16k_zh` | 使用腾讯云录音识别任务轮询。需要 `tencentcloud-sdk-python`。 |
 
@@ -89,6 +91,7 @@ ASR 凭证矩阵：
 - 未选择 LLM API 时的默认路线：任意内置 ASR provider + 当前 IDE/Agent 辅助校对和总结。
 - 纯 API 路线：内置 ASR provider + 明确指定 `--llm-provider` / `--llm-api-key`，脚本自动先校对再总结。
 - 降低对 MiMo ASR 的依赖：阿里 Qwen ASR + 任意 OpenAI-compatible LLM。
+- 需要 Fun-ASR-Flash 的方言与上下文能力：使用 `aliyun-funasr-flash`；该 provider 与 Qwen 的 OpenAI-compatible payload 分离。
 - 已订阅 Step Plan：阶跃星辰 ASR + `--stepfun-plan`，确保消耗订阅额度而不是普通开放平台计费。
 - 腾讯 ASR 适合已经有腾讯云账号和录音识别额度的用户，但它是异步任务，每个分片会更慢。
 - 智谱、Kimi、MiniMax、阿里、腾讯混元都可以在 transcript 窗口可靠时完成校对和生成目标报告；脚本的分批和校验机制比单纯上下文长度更关键。

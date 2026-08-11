@@ -11,8 +11,10 @@
 
 - ASR 凭据在第一次真实转写成功后保存到本机用户配置，后续新对话自动复用。
 - 缓存凭据只有在 401/403 或明确认证失败时才会删除并重新索取；429、网络错误和服务端错误不会误删。
-- 支持按 provider 独立保存 MiMo、阿里 Qwen、阶跃星辰和腾讯 ASR 凭据。
-- 已通过 105 个单元测试、脚本自检，以及 skill-judge `118/120（A）` 和 SkillOpt held-out `6/6` 验证。
+- 支持按 provider 独立保存 MiMo、阿里 Qwen、阿里 Fun-ASR-Flash、阶跃星辰和腾讯 ASR 凭据。
+- 默认媒体解析同时生成转写 TXT、逐窗口 Markdown 时间线和完全离线 HTML 图文速览；只有明确“只转写”时才缩减产物。
+- HTML 使用 VisualBriefManifest v2，包含一句话总览、核心要点、开发启发、批判性思考和延伸问题。
+- 已通过 114 个单元测试、脚本自检，以及 skill-judge `116/120（A）` 和 SkillOpt skillquality `17/17` 验证。
 
 它适合长音频和长视频内容。最终报告会包含：
 

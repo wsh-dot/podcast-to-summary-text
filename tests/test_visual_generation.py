@@ -350,11 +350,17 @@ class APILLMVisualBriefTests(unittest.TestCase):
             media_source={"kind": "remote-video", "url": "https://example.com/video"},
         )
 
-        self.assertIn("5-7 minute", prompt)
+        self.assertIn("7-10 minute", prompt)
         self.assertIn("exactly 4 core insights", prompt)
         self.assertIn("exactly 5 chapters", prompt)
-        self.assertIn("1800-2500 visible CJK characters", prompt)
+        self.assertIn("2600-3800 visible CJK characters", prompt)
+        self.assertIn("version 2 VisualBriefManifest", prompt)
         self.assertIn("Do not emit quote visuals or frame_priority", prompt)
+        self.assertIn("Each chapter must include 3-5 summary_cards", prompt)
+        self.assertIn("must not repeat or truncate the body's opening", prompt)
+        self.assertIn("Agent-development learning path", prompt)
+        self.assertIn("critical_thinking", prompt)
+        self.assertIn("further_questions", prompt)
         self.assertNotIn("15-20", prompt)
 
     def test_compact_chinese_density_enforces_exact_structure_and_cjk_range(self):
@@ -595,7 +601,7 @@ class APILLMVisualIntegrationTests(unittest.TestCase):
                 "--title",
                 "Launch review",
             ]
-            with patch.object(sys, "argv", argv):
+            with patch.object(sys, "argv", argv), patch("builtins.print") as output:
                 tool.main()
 
             self.assertTrue((output_dir / "Launch_review_逐窗口深度解读.md").is_file())
@@ -603,6 +609,9 @@ class APILLMVisualIntegrationTests(unittest.TestCase):
             self.assertTrue((prompt_root / "workflow.json").is_file())
             self.assertTrue((prompt_root / "batch_prompts" / "001.md").is_file())
             self.assertFalse((output_dir / "Launch_review_图文速览.html").exists())
+            status = " ".join(str(arg) for call in output.call_args_list for arg in call.args)
+            self.assertIn("中间状态：HTML 待生成", status)
+            self.assertNotIn("=== 完成 ===", status)
 
     def test_manual_visual_prompt_failure_preserves_published_markdown(self):
         tool = load_podcast_tool()

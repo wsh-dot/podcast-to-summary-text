@@ -1,6 +1,6 @@
 ---
 name: mimo-token-plan-asr-llm-pipeline
-description: Use when a user needs 播客或长音视频转写、校对、总结或图文解读，输入来自本地媒体、Bilibili/B站、小宇宙、YouTube、URL 或已有 `[HH:MM-HH:MM]` transcript；也适用于 ASR、MiMo Token Plan、Qwen、StepFun/StepAudio、腾讯 ASR、逐窗口深度解读、带时间点摘要或完全离线 HTML 图文速览请求。
+description: Use when a user needs 播客或长音视频转写、校对、总结或图文解读，输入来自本地媒体、Bilibili/B站、小宇宙、YouTube、URL 或已有 `[HH:MM-HH:MM]` transcript；也适用于 ASR、MiMo Token Plan、阿里 Fun-ASR-Flash/DashScope、Qwen、StepFun/StepAudio、腾讯 ASR、FDE、逐窗口 Markdown 时间线或完全离线 HTML 图文速览请求。
 ---
 
 # 时间线转写、摘要与离线图文速览
@@ -16,11 +16,23 @@ description: Use when a user needs 播客或长音视频转写、校对、总结
 
 在执行下载或外部 API 前依次确定三件事。用户已提供的信息直接采用，不重复询问。
 
-1. **ASR 来源**：MiMo、阿里 Qwen、StepFun 普通 API、Step Plan、腾讯，或已有 transcript。
+1. **ASR 来源**：MiMo、阿里 Qwen、阿里 Fun-ASR-Flash、StepFun 普通 API、Step Plan、腾讯，或已有 transcript。
 2. **时间线路线**：`ide-agent`（默认）、`api-llm`，或合并已有 `manual sections`。
-3. **视觉路线**：不生成视觉、`api-llm` 自动生成，或 `manual` JSON 三阶段。
+3. **视觉路线**：`ide-agent/manual`（默认）或 `api-llm` 自动生成；只有用户明确说“不要 HTML”时才不生成视觉。
 
-每轮最多询问一个选择。用户只要求转写或 Markdown 时跳过视觉决策。StepFun 必须明确普通计费还是 Step Plan；两者不得自动互相回退。用户只提供 ASR key 时不得推断其同意 LLM API，时间线路线使用 `ide-agent`。
+每轮最多询问一个选择。StepFun 必须明确普通计费还是 Step Plan；两者不得自动互相回退。用户只提供 ASR key 时不得推断其同意 LLM API，时间线与视觉均使用 `ide-agent`，不因缺少 LLM API 凭据缩减默认产物。
+
+先把用户请求映射为明确产物；不要用 provider 选择替代产物判断：
+
+| 用户请求 | 必须产物 | 禁止误推断 |
+|---|---|---|
+| “解析/处理/转写音频或视频” | `<base>_转写.txt` + `<base>_逐窗口深度解读.md` + `<base>_图文速览.html` | `--transcribe-only` 只是内部第一阶段，不得作为任务完成。 |
+| 明确“只转写/不要总结” | `<base>_转写.txt` | 只有这种显式限制才允许省略 Markdown 与 HTML。 |
+| “Markdown 时间线/总结” | 校对稿 + `<base>_逐窗口深度解读.md` + `<base>_图文速览.html` | 不因已有 ASR key 推断同意 LLM API；默认走 `ide-agent` 继续视觉阶段。 |
+| “HTML 总结/图文速览” | 先发布转写、校对稿与已验证 Markdown，再发布 HTML | 不使用 `--transcribe-only` 结束整条任务。 |
+| “完整处理/转写并总结” | 转写 + 校对 + Markdown + HTML | 任何一个产物缺失都不得报整项完成。 |
+
+默认三产物合同适用于本地音频/视频、Bilibili、小宇宙、YouTube 和其他媒体 URL。视觉失败仍不得删除已生成的 TXT/Markdown，但任务状态必须保持“HTML 待修复”，继续修复 manifest/renderer 后再交付；不能把降级为双产物描述成成功完成。
 
 ASR 凭据按显式参数、环境变量、本机 provider 缓存的顺序解析；三者都没有时才向用户索取。新凭据在首个真实 ASR 分片成功后立即保存，后续窗口失败或新建对话都可自动复用。缓存凭据遇到 401/403 或明确认证失败时，只删除该 provider 的缓存并重新向用户索取最新凭据；429、网络错误或服务端错误不得清除。凭据不得出现在回复、报告、日志示例或仓库文件中。存储位置、优先级和主动清除见 `references/providers.md`。
 
@@ -44,6 +56,16 @@ MiMo Token Plan：
 python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --api-key "tp-..."
 ```
 
+阿里 Fun-ASR-Flash：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only \
+  --asr-provider aliyun-funasr-flash --asr-api-key "sk-..."
+```
+
+默认模型为 `fun-asr-flash-2026-06-15`，使用原生 multimodal-generation HTTP
+非流式接口。默认 3 分钟分片低于模型 5 分钟上限。
+
 StepFun 普通 API：
 
 ```bash
@@ -64,7 +86,7 @@ python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider s
 
 ### `ide-agent`（默认）
 
-1. 运行 `--transcribe-only` 保存原始窗口稿。
+1. 运行 `--transcribe-only` 保存原始窗口稿；这是内部阶段，除非用户明确要求只转写，否则不得在这里结束。
 2. 当前 Agent 逐窗口校对，保持全部标签和内容归属，保存 `<base>_校对.txt`。
 3. 每 6 个窗口写入 `<base>_agent_sections/batch_*.md`。
 4. 合并并校验 Markdown：
@@ -132,17 +154,33 @@ python scripts/mimo_podcast_tool.py input.mp3 \
 
 ## 输出合同
 
-成功的 timeline 总结至少保留：
+默认音视频解析成功必须保留：
 
 ```text
 <base>_校对.txt                 # separate/已有校对稿路线
 <base>_逐窗口深度解读.md        # 权威事实产物
-<base>_图文速览.html            # visual 成功时
+<base>_图文速览.html            # 默认必需；缺失时任务仍未完成
 <base>_图文速览_assets/
   frames/*.webp                 # 仅可用视频代表帧
 ```
 
-全局 synthesis 必须先按顺序读完完整校对 transcript；批次结果只约束证据，不能代替全文阅读。超过 60 分钟且中文占主导的内容使用 compact editorial profile：约 1800–2500 个可见汉字、4 个核心结论、5 个主题、最多 8 张 renderer-owned CSS/SVG 信息图；不得调用 frame provider、不得输出视频截图或完整 transcript，最终只发布单个 HTML。其他语言和短内容保留原密度合同。页面必须完全离线、响应式、键盘可用。
+全局 synthesis 必须先按顺序读完完整校对 transcript；批次结果只约束证据，不能代替全文阅读。超过 60 分钟且中文占主导的内容使用 compact editorial profile：v2 约 2600–3800 个可见汉字、4 个核心结论、5 个主题、最多 8 张 renderer-owned CSS/SVG 信息图；不得调用 frame provider、不得输出视频截图或完整 transcript，最终只发布单个 HTML。其他语言和短内容保留原密度合同。页面必须完全离线、响应式、键盘可用。
+
+compact 每章还必须提供 3–5 个 `summary_cards`。卡片标题是 4–24 字符的结论、对比或因果概括，必须提供正文之外的解释增量；绝不把正文首句、截断首句或正文同义复写当标题。卡片正文按顺序拼接后必须逐字等于章节 `summary`。
+
+新生成的 HTML 使用 VisualBriefManifest v2，并完整覆盖 article-interpreter 的五层解读：不超过 50 字的 `one_line_overview`、硬核 `core_insights`、4–5 条 `developer_takeaways`、2–4 条 `critical_thinking`、2–4 条 `further_questions`。开发启发必须包含 RAG/上下文工程、模型训练与数据、Agent 构建与可靠性、Agent 开发学习路径四个方向，每条说明“是什么 → 为什么重要 → 怎么用”。批判性思考标记需要验证的假设与证据局限，不把推论伪装成事实；延伸问题必须指向实验、指标或实现决策。所有条目都携带真实 `source_windows`。
+
+### 完成交付门
+
+对默认媒体解析请求，回复“完成”之前必须同时验证以下三个文件存在且非空：
+
+```text
+<base>_转写.txt
+<base>_逐窗口深度解读.md
+<base>_图文速览.html
+```
+
+Markdown 必须通过窗口全覆盖校验；HTML 必须通过 manifest、离线和静态结构校验。仅导出 prompts、仅生成 batch JSON、仅得到 Markdown 或视觉降级警告都属于中间状态。只有用户明确要求“只转写/不要总结”时，三产物门才降为单一 TXT 门。
 
 ## 按需加载
 
@@ -160,11 +198,18 @@ python scripts/mimo_podcast_tool.py input.mp3 \
 
 ## 验证门
 
+安装后的 skill 包必须运行以下安装态验证；它不假设 `tests/` 随运行包发布：
+
 ```bash
-python -m unittest discover -s tests -v
 python scripts/mimo_podcast_tool.py --self-test
 python -m compileall -q scripts
 python scripts/mimo_podcast_tool.py --help
+```
+
+修改源码仓库时还必须从仓库根目录运行完整回归：
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 在 Windows 中文环境运行外部 skill 校验器时显式启用 UTF-8，例如 PowerShell 使用 `$env:PYTHONUTF8=1`；Linux/macOS 使用 `PYTHONUTF8=1 python ...`。

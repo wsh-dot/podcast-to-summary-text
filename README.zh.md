@@ -15,7 +15,9 @@ mimo-token-plan-asr-llm-pipeline/
 
 ## 这个 Skill 有什么用
 
-这个 skill 用来帮助 AI 编程 Agent 把播客、视频、网页链接或已有转写稿，整理成带时间点的深度摘要 Markdown 报告。
+这个 skill 用来帮助 AI 编程 Agent 把播客、视频、网页链接或已有转写稿，整理成转写文本、带时间点的深度摘要 Markdown 报告和完全离线的 HTML 图文速览。
+
+默认处理音频或视频时会同时交付三个产物：`<base>_转写.txt`、`<base>_逐窗口深度解读.md` 和 `<base>_图文速览.html`。只有用户明确要求“只转写/不要总结”时才缩减为单一转写文件。
 
 它适合长音频和长视频内容。最终报告会包含：
 
@@ -26,6 +28,8 @@ mimo-token-plan-asr-llm-pipeline/
 - 只在转写稿有依据时保留短引用
 - 转写说明
 - 方便快速浏览的“核心观点速览”表格
+- HTML 使用 VisualBriefManifest v2，包含一句话总览、核心要点、开发启发、批判性思考和延伸问题
+- 开发启发至少覆盖 RAG/上下文工程、模型训练与数据、Agent 构建与可靠性、Agent 开发学习路径
 
 默认报告是严格的时间线报告：
 
@@ -178,6 +182,7 @@ pip install tencentcloud-sdk-python
 |---|---|
 | MiMo ASR | `--api-key`、`--asr-api-key` 或 `MIMO_API_KEY` |
 | 阿里 Qwen ASR | `--asr-provider aliyun-qwen --asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` |
+| 阿里 Fun-ASR-Flash | `--asr-provider aliyun-funasr-flash --asr-api-key`、`DASHSCOPE_API_KEY` 或 `ALIYUN_API_KEY` |
 | 阶跃星辰 ASR | `--asr-provider stepfun --asr-api-key`、`STEPFUN_API_KEY` 或 `STEP_API_KEY`；Step Plan 订阅加 `--stepfun-plan` |
 | 腾讯 ASR | `--asr-provider tencent --tencent-secret-id --tencent-secret-key` |
 | 已有 transcript | 不需要 ASR API，使用 `--transcript-input` |
@@ -228,6 +233,15 @@ python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider a
 python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
 ```
 
+阿里 Fun-ASR-Flash，然后用当前 IDE/Agent 模型校对和总结：
+
+```bash
+python scripts/mimo_podcast_tool.py input.mp3 --transcribe-only --asr-provider aliyun-funasr-flash --asr-api-key "sk-xxxx"
+python scripts/mimo_podcast_tool.py --transcript-input input_转写.txt --manual-sections-dir input_agent_sections
+```
+
+默认模型是 `fun-asr-flash-2026-06-15`，调用 DashScope 原生非流式 `multimodal-generation` 接口；默认 3 分钟分片低于模型 5 分钟限制。
+
 阶跃星辰 StepAudio 2.5 ASR，使用 Step Plan 订阅额度：
 
 ```bash
@@ -270,7 +284,7 @@ Cookies 是敏感凭证。不要打印、写进报告或提交到仓库。
 
 ```bash
 python scripts/mimo_podcast_tool.py --self-test
-python -m py_compile scripts/mimo_podcast_tool.py
+python -m compileall -q scripts
 python scripts/mimo_podcast_tool.py --help
 ```
 
@@ -278,6 +292,6 @@ python scripts/mimo_podcast_tool.py --help
 
 当前发布还通过了：
 
-- `python -m unittest discover -s tests -v`：105 个测试
-- skill-judge：`118/120（A）`
-- SkillOpt held-out gate：`hard=1.0000`、`soft=1.0000`（6/6）
+- `python -m unittest discover -s tests -v`：114 个测试
+- skill-judge：`116/120（A）`
+- SkillOpt skillquality gate：`hard=1.0000`、`soft=1.0000`（17/17）

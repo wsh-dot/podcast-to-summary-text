@@ -144,11 +144,22 @@ def _visible_manifest_strings(manifest):
             yield value["text"]
 
     yield from sourced_text(manifest.get("overview"))
+    yield from sourced_text(manifest.get("one_line_overview"))
     for insight in manifest.get("core_insights", []):
         yield from sourced_text(insight)
+    for field in ("developer_takeaways", "critical_thinking", "further_questions"):
+        for item in manifest.get(field, []):
+            if isinstance(item, dict):
+                if isinstance(item.get("title"), str):
+                    yield item["title"]
+                if isinstance(item.get("text"), str):
+                    yield item["text"]
     for chapter in manifest.get("chapters", []):
         yield from sourced_text(chapter.get("title"))
         yield from sourced_text(chapter.get("summary"))
+        for card in chapter.get("summary_cards", []):
+            if isinstance(card, dict):
+                yield from sourced_text(card.get("title"))
         for evidence in chapter.get("evidence", []):
             if isinstance(evidence, dict) and isinstance(evidence.get("label"), str):
                 yield evidence["label"]
@@ -183,9 +194,18 @@ def _synthesis_prompt(validated_batches, report, metadata, duration_seconds,
     )
     if compact:
         density = (
-            "Target a 5-7 minute editorial read with 1800-2500 visible CJK characters, "
+            "Target a 7-10 minute editorial read with 2600-3800 visible CJK characters, "
             "exactly 4 core insights, exactly 5 chapters, and a target of 6-8 visuals "
-            "with at most 2 per chapter. Do not emit quote visuals or frame_priority."
+            "with at most 2 per chapter. Do not emit quote visuals or frame_priority. "
+            "Each chapter must include 3-5 summary_cards. Each card has a sourced title and "
+            "a sourced text body; titles must be 4-24 characters, state the takeaway or "
+            "contrast, and must not repeat or truncate the body's opening. Card bodies in "
+            "order must concatenate exactly to the chapter summary text. Produce four "
+            "developer_takeaways covering RAG/context engineering, model training/data, "
+            "Agent construction/reliability, and an ordered Agent-development learning path. "
+            "Each takeaway must explain what it is, why it matters, and how to apply it. Also "
+            "produce 2-4 evidence-based critical_thinking items and 2-4 actionable "
+            "further_questions."
         )
     elif duration_seconds <= 3600:
         density = "Target a 5-10 minute read, at most 6 core insights and 5 visuals."
@@ -197,10 +217,10 @@ def _synthesis_prompt(validated_batches, report, metadata, duration_seconds,
         for block in calibrated_transcript_blocks
     ]
     return f"""VISUAL_SYNTHESIS_REQUEST
-Create one VisualBriefManifest JSON object for the fixed offline renderer. {density}
+Create one version 2 VisualBriefManifest JSON object for the fixed offline renderer. {density}
 Read the complete calibrated transcript before global interpretation. Use the validated batches as evidence constraints, not as a substitute for reading the full transcript.
 Group only adjacent windows and cover every source window exactly once, in order. Use only process, comparison, relationship, metrics, concept, and verified quote visuals. When evidence supports none, return an empty visuals list for that chapter so the renderer uses an editorial insight presentation. Do not return HTML, JavaScript, CSS, SVG, Markdown, or prose outside JSON.
-The required manifest keys are version, overview, core_insights, and chapters. Each chapter requires id, title, summary, source_windows, evidence, and visuals. Source kind: {source_kind}.
+The required manifest keys are version, one_line_overview, overview, core_insights, developer_takeaways, critical_thinking, further_questions, and chapters. `one_line_overview` is a sourced conclusion of at most 50 characters, not "this content introduces...". Interpretive list items contain exactly title, text, and source_windows. Critical items must identify a specific assumption or evidence limit without inventing a rebuttal; further questions must point to a concrete experiment, metric, or implementation decision. Each chapter requires id, title, summary, source_windows, evidence, and visuals; compact chapters also require summary_cards. Source kind: {source_kind}.
 Every overview, core-insight, chapter title, chapter summary, visual title, process item, and concept item must be an object with exactly `text` and non-empty `source_windows`. Every comparison and relationship item must include non-empty `source_windows`. Metrics and quotes retain their exact `source_window`. All references must belong to the containing chapter (or the full transcript for overview/core insights), and every visible claim or label must carry evidence references.
 TRUSTED_METADATA_JSON:
 {json.dumps(metadata, ensure_ascii=False)}
@@ -231,6 +251,9 @@ def _validate_density(manifest, duration_seconds, calibrated_transcript_blocks=N
     )
     if compact:
         cjk_count = visible_manifest_cjk_count(manifest)
+        cjk_minimum, cjk_maximum = (
+            (2600, 3800) if manifest.get("version") == 2 else (1800, 2500)
+        )
         has_quote = any(
             visual.get("type") == "quote"
             for chapter in chapters
@@ -247,7 +270,7 @@ def _validate_density(manifest, duration_seconds, calibrated_transcript_blocks=N
         if (
             len(insights) != 4
             or len(chapters) != 5
-            or not 1800 <= cjk_count <= 2500
+            or not cjk_minimum <= cjk_count <= cjk_maximum
             or visual_count > 8
             or any(count > 2 for count in visual_counts)
             or has_quote
@@ -255,7 +278,7 @@ def _validate_density(manifest, duration_seconds, calibrated_transcript_blocks=N
             or evidence_too_long
         ):
             raise ValueError(
-                "compact density requires 4 insights, 5 chapters, 1800-2500 visible "
+                f"compact density requires 4 insights, 5 chapters, {cjk_minimum}-{cjk_maximum} visible "
                 f"CJK characters, at most 8 visuals and 2 per chapter; got "
                 f"insights={len(insights)}, chapters={len(chapters)}, cjk={cjk_count}, "
                 f"visuals={visual_count}"

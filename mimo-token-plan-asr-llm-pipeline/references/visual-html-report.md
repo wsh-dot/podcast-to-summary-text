@@ -38,18 +38,30 @@ visual 失败不得回滚或覆盖 transcript/Markdown。
 
 ## 3. Manifest 与证据规则
 
-顶层必需字段：
+新生成内容使用 v2；v1 只用于兼容既有清单。v2 顶层必需字段：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "one_line_overview": {"text": "不超过 50 字的核心结论", "source_windows": ["00:00-00:30"]},
   "overview": {"text": "...", "source_windows": ["00:00-00:30"]},
   "core_insights": [
     {"text": "...", "source_windows": ["00:00-00:30"]}
   ],
+  "developer_takeaways": [
+    {"title": "RAG 上下文工程", "text": "是什么、为什么重要、怎么用", "source_windows": ["00:00-00:30"]}
+  ],
+  "critical_thinking": [
+    {"title": "需要验证的假设", "text": "具体证据局限", "source_windows": ["00:00-00:30"]}
+  ],
+  "further_questions": [
+    {"title": "下一步实验", "text": "可行动的问题", "source_windows": ["00:00-00:30"]}
+  ],
   "chapters": []
 }
 ```
+
+v2 必须覆盖五层解读：一句话总览、核心要点、开发启发、批判性思考、延伸问题。`developer_takeaways` 为 4–5 条，至少覆盖 RAG/上下文工程、模型训练与数据、Agent 构建与可靠性、Agent 开发学习路径；`critical_thinking` 与 `further_questions` 各 2–4 条。三个解释型列表的每项严格只含 `title`、`text`、`source_windows`。
 
 `overview`、core insight、章节 `title`/`summary`、visual `title` 和 process/concept item 都使用严格的 `SourcedText`：只含非空 `text` 与非空 `source_windows`。每章必需 `id`、`title`、`summary`、`source_windows`、`evidence`、`visuals`；视频可选 `frame_priority`（0–100）。comparison/relationship 的每个 item 也必须带 `source_windows`；metrics/quote 使用精确 `source_window`。
 
@@ -64,9 +76,9 @@ visual 失败不得回滚或覆盖 transcript/Markdown。
 - 没有证据支持视觉时 `visuals: []`；固定 renderer 使用 editorial insight，不制造图表。
 - 每条可见 claim、diagram item、edge 和 label 的来源必须落在其章节窗口内；overview/core insight 可引用全文真实窗口。
 - 短内容最多 6 个核心 insight、5 个视觉；长内容最多 10 个 insight、8 个视觉。这些是上限，不是配额。
-- 超过 60 分钟且校对稿中 CJK 字符不少于 ASCII 拉丁字母时，启用 compact editorial profile：精确 4 个核心 insight、5 个相邻窗口章节、1800–2500 个可见汉字，每章最多 2 个视觉、全文最多 8 个。`process` 按 item 数映射为流程/时间线，`comparison` 映射为对比图，环形 `relationship` 映射为飞轮，其他关系映射为网络图，`metrics` 映射为指标条，`concept` 映射为分层图。
+- 超过 60 分钟且校对稿中 CJK 字符不少于 ASCII 拉丁字母时，启用 compact editorial profile：v2 精确 4 个核心 insight、5 个相邻窗口章节、2600–3800 个可见汉字，每章最多 2 个视觉、全文最多 8 个。v1 兼容清单仍使用原 1800–2500 范围。`process` 按 item 数映射为流程/时间线，`comparison` 映射为对比图，环形 `relationship` 映射为飞轮，其他关系映射为网络图，`metrics` 映射为指标条，`concept` 映射为分层图。
 
-模型字段严格白名单。任何 `html`、`javascript`、`css`、`svg`、绝对路径或 `..` 都应在发布前失败。
+禁止接受模型生成的 HTML/CSS/JavaScript/SVG：模型字段严格白名单，任何对应字段、绝对路径或 `..` 都应在发布前失败；只有固定 renderer 可以生成页面代码。
 
 ## 4. 视频代表帧
 
@@ -89,6 +101,8 @@ Bilibili 视觉源仍只用 BBDown 1.6.3 `--video-only --video-ascending`；不�
 
 - 视觉意图是温暖、自信的现代编辑海报。必须使用语义 token：amber `--color-primary: #CC8800`、burnt orange `--color-secondary: #C55221`、surface `#FFFFFF`、text `#111827`；正文不得直接依赖临时 raw color。
 - compact profile 使用奶油色画布和独立 SECTION 分组。每章标题与来源标签在上方，完整摘要按语义和句子边界确定性拆为 3–5 张双列白色内容卡片；卡片正文按原顺序拼接后必须逐字等于原摘要。信息图在卡片网格下方占满宽度，680px 以下内容卡片变为单列。普通 Reader 使用焦橙 hero、奶油网格画布、白色导航/章节卡片。两者必须共享字体、色彩、间距和焦点语言。
+- 每张 compact 内容卡片必须在 manifest 中显式提供 `title` 与 `text` 两个 `SourcedText`。标题用 4–24 字符回答“这段说明了什么 / 为什么重要”，优先表达结论、对比、因果或行动；标题不得等于正文，也不得复制正文开头、截断首句加省略号或只做同义复写。全部 `text` 按序拼接仍须逐字等于章节 `summary`。
+- v2 Reader 在章节之后增加“从内容到行动”：4–5 张开发启发卡，以及并列的“需要验证的假设”和“值得继续探索”。这些内容不是泛泛结语，必须落到工程动作、验证方法或决策问题；每项保留证据窗口。
 - display 字体栈优先 Chakra Petch，mono 优先 JetBrains Mono；不得为了字体发起网络请求，缺失时使用内嵌 CSS 中的系统 fallback。
 - 可交互链接、搜索框和 disclosure 的触控高度至少 44px。链接必须具有 default、hover、focus-visible 和 active（适用时）状态；搜索框必须具有 default、hover、focus-visible 状态。
 - 所有不可信文本统一 HTML escape。
@@ -136,7 +150,8 @@ Bilibili 视觉源仍只用 BBDown 1.6.3 `--video-only --video-ascending`；不�
 ## 8. 视觉与无障碍 QA
 
 - [ ] 375、390、768、1024、1440px 均无横向滚动，长标题可换行且不遮挡装饰文字。
-- [ ] compact 每章摘要拆为 3–5 张双列内容卡片，680px 以下单列；全部卡片正文按序拼接后逐字等于原摘要，信息图在卡片下方全宽呈现。
+- [ ] compact 每章摘要拆为 3–5 张双列内容卡片，680px 以下单列；标题提供解释增量且不复述正文开头；全部卡片正文按序拼接后逐字等于原摘要，信息图在卡片下方全宽呈现。
+- [ ] v2 包含一句话总览、核心要点、至少四类开发启发、批判性思考和延伸问题；一句话不超过 50 字，启发说明“是什么、为什么、怎么用”。
 - [ ] 六类图表、无图表文字回退、视频帧、导航、搜索和来源链接使用同一语义 token。
 - [ ] Tab 可到达 skip link、所有链接、搜索与 disclosure；焦点轮廓至少 3px 且不被裁切。
 - [ ] 触控目标至少 44px；`prefers-reduced-motion` 会移除滚动与 hover transition。

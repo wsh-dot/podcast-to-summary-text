@@ -181,15 +181,51 @@ def compact_manifest():
             ],
         },
     ]
+    interpretation_item = lambda title, text, *source_windows: {
+        "title": title,
+        "text": text,
+        "source_windows": list(source_windows),
+    }
     return {
-        "version": 1,
+        "version": 2,
+        "one_line_overview": sourced("证据必须转化为可执行行动。", *windows),
         "overview": sourced("完整阅读转写稿后形成的短篇全局解读。", *windows),
         "core_insights": [sourced(f"核心结论{index}", windows[index]) for index in range(4)],
+        "developer_takeaways": [
+            interpretation_item("RAG 上下文工程", "组合知识、权限与任务状态并保留引用。", windows[0]),
+            interpretation_item("模型训练与数据", "保存行为轨迹、结果反馈和异常处理。", windows[1]),
+            interpretation_item("Agent 构建可靠性", "定义工具边界、失败回退和业务指标。", windows[2]),
+            interpretation_item("Agent 开发学习路径", "从单 Agent 可验证任务逐步学习到复杂协作。", windows[3]),
+        ],
+        "critical_thinking": [
+            interpretation_item("效果归因仍需验证", "业务改善需要基线和对照实验支持。", windows[3]),
+            interpretation_item("案例代表性有限", "单一案例不能直接外推全部行业。", windows[4]),
+        ],
+        "further_questions": [
+            interpretation_item("建立任务评测集", "下一步应定义成功率与工具调用准确率。", windows[0]),
+            interpretation_item("设计灰度上线", "用低峰流量验证权限和失败回退。", windows[4]),
+        ],
         "chapters": [
             {
                 "id": f"chapter-{index}",
                 "title": sourced(f"主题{index + 1}", window),
-                "summary": sourced("这一节只保留高度概括的编辑式总结。", window),
+                "summary": sourced(
+                    "先识别问题边界。再根据证据形成判断。最后把结论转成行动。", window
+                ),
+                "summary_cards": [
+                    {
+                        "title": sourced("边界先于方案", window),
+                        "text": sourced("先识别问题边界。", window),
+                    },
+                    {
+                        "title": sourced("证据形成判断", window),
+                        "text": sourced("再根据证据形成判断。", window),
+                    },
+                    {
+                        "title": sourced("行动闭环落地", window),
+                        "text": sourced("最后把结论转成行动。", window),
+                    },
+                ],
                 "source_windows": [window],
                 "evidence": [{"window": window, "label": "来源窗口"}],
                 "visuals": ([visuals[index]] if index < 4 else visuals[4:]),
@@ -312,6 +348,13 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 "chapter-section",
                 "summary-card-grid",
                 "summary-card",
+                "one-line-overview",
+                "deep-interpretation",
+                "takeaway-grid",
+                "给 AI 应用开发者的启发",
+                "需要验证的假设",
+                "值得继续探索",
+                "Agent 开发学习路径",
                 "flow-diagram",
                 "timeline-diagram",
                 "comparison-diagram",
@@ -335,15 +378,22 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 self.assertIn(expected, page)
             self.assertEqual(page.count('class="chapter-section"'), len(compact_manifest()["chapters"]))
             expected_card_count = sum(
-                len(visual_reader._summary_card_groups(chapter["summary"]["text"]))
+                len(chapter["summary_cards"])
                 for chapter in compact_manifest()["chapters"]
             )
             self.assertEqual(page.count('class="summary-card"'), expected_card_count)
             for chapter in compact_manifest()["chapters"]:
-                groups = visual_reader._summary_card_groups(chapter["summary"]["text"])
-                self.assertEqual("".join(groups), chapter["summary"]["text"])
-                for group in groups:
-                    self.assertIn(group, page)
+                cards = chapter["summary_cards"]
+                self.assertEqual(
+                    "".join(card["text"]["text"] for card in cards),
+                    chapter["summary"]["text"],
+                )
+                for card in cards:
+                    self.assertIn(card["title"]["text"], page)
+                    self.assertIn(card["text"]["text"], page)
+                    self.assertFalse(
+                        card["text"]["text"].startswith(card["title"]["text"])
+                    )
                 for evidence in chapter["evidence"]:
                     self.assertIn(evidence["label"], page)
             for forbidden in (
@@ -355,6 +405,24 @@ class VisualReaderOrchestrationTests(unittest.TestCase):
                 "TRANSCRIPT_ONLY_SENTINEL",
             ):
                 self.assertNotIn(forbidden, page)
+
+    def test_version_two_rejects_long_one_line_overview(self):
+        manifest = compact_manifest()
+        manifest["one_line_overview"]["text"] = "过" * 51
+        self.assert_visual_failure(
+            manifest,
+            blocks=compact_blocks(),
+            media_source={"kind": "audio", "url": None},
+        )
+
+    def test_compact_reader_rejects_summary_title_that_repeats_body_opening(self):
+        manifest = compact_manifest()
+        manifest["chapters"][0]["summary_cards"][0]["title"]["text"] = "先识别问题边界"
+        self.assert_visual_failure(
+            manifest,
+            blocks=compact_blocks(),
+            media_source={"kind": "audio", "url": None},
+        )
 
     def test_compact_reader_rejects_frame_assets(self):
         visual_reader = load_visual_reader()

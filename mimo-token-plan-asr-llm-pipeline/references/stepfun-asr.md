@@ -11,7 +11,7 @@
 | 普通开放平台计费 | `--asr-provider stepfun` | `POST https://api.stepfun.com/v1/audio/asr/sse` |
 | Step Plan 订阅额度 | `--asr-provider stepfun --stepfun-plan` | `POST https://api.stepfun.com/step_plan/v1/audio/asr/sse` |
 
-两条路径参数相同，但计费归属不同。**NEVER** 在其中一条失败后自动回退另一条；这会让费用落到用户未选择的账户体系。Step Plan 当前只支持 HTTP + SSE 方式调用 `stepaudio-2.5-asr`。
+两条路径参数相同，但计费归属不同。**不得自动回退**：其中一条失败后绝不切换到另一条；这会让费用落到用户未选择的账户体系。Step Plan 当前只支持 HTTP + SSE 方式调用 `stepaudio-2.5-asr`。
 
 凭据使用 `--asr-api-key`、`STEPFUN_API_KEY` 或 `STEP_API_KEY`。自定义网关可用 `--asr-base-url` 覆盖前缀；覆盖后 `--stepfun-plan` 不再改写该值。
 

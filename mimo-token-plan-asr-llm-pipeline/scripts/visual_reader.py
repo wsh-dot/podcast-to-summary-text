@@ -248,9 +248,48 @@ def _summary_card_title(text):
     return candidate if len(candidate) <= 18 else f"{candidate[:18]}…"
 
 
+def _render_interpretation_items(items, class_name):
+    return "".join(
+        f'<article class="interpretation-card {class_name}"{_source_attrs(item)}>'
+        f'<h3>{_text(item["title"])}</h3><p>{_text(item["text"])}</p></article>'
+        for item in items
+    )
+
+
+def _render_interpretation_sections(manifest, language="zh-CN"):
+    if manifest.get("version") != 2:
+        return ""
+    is_chinese = language.lower().startswith("zh")
+    labels = (
+        ("从内容到行动", "给 AI 应用开发者的启发", "需要验证的假设", "值得继续探索")
+        if is_chinese
+        else ("From insight to action", "For AI application developers", "Assumptions to validate", "Questions to explore")
+    )
+    takeaways = _render_interpretation_items(
+        manifest["developer_takeaways"], "takeaway-card"
+    )
+    critical = _render_interpretation_items(
+        manifest["critical_thinking"], "critical-card"
+    )
+    questions = _render_interpretation_items(
+        manifest["further_questions"], "question-card"
+    )
+    return (
+        '<section class="deep-interpretation">'
+        f'<p class="section-label">{_text(labels[0])}</p>'
+        f'<h2>{_text(labels[1])}</h2><div class="takeaway-grid">{takeaways}</div>'
+        '<div class="reflection-grid">'
+        f'<section><h2>{_text(labels[2])}</h2><div class="reflection-list">{critical}</div></section>'
+        f'<section><h2>{_text(labels[3])}</h2><div class="reflection-list">{questions}</div></section>'
+        '</div></section>'
+    )
+
+
 def _render_compact_page(blocks, metadata, media_source, manifest):
     title = _text(metadata.get("title", "图文解读"))
     language = _text(metadata.get("language", "zh-CN"))
+    one_line = manifest.get("one_line_overview", manifest["overview"])
+    interpretation = _render_interpretation_sections(manifest, metadata.get("language", "zh-CN"))
     insights = "".join(
         f'<li{_source_attrs(item)}><span>{index:02d}</span><p>{_claim_text(item)}</p></li>'
         for index, item in enumerate(manifest["core_insights"], start=1)
@@ -264,16 +303,26 @@ def _render_compact_page(blocks, metadata, media_source, manifest):
         visuals = "".join(_render_compact_visual(item) for item in chapter.get("visuals", []))
         if not visuals:
             visuals = '<div class="editorial-text-treatment">本节以文字解读呈现</div>'
-        summary_cards = "".join(
-            f'<article class="summary-card"{_source_attrs(chapter["summary"])}>'
-            f'<p class="summary-card-index">{card_index:02d}</p>'
-            f'<h3>{_text(_summary_card_title(card_text))}</h3>'
-            f'<p>{_text(card_text)}</p></article>'
-            for card_index, card_text in enumerate(
-                _summary_card_groups(chapter["summary"]["text"]),
-                start=1,
+        card_records = chapter.get("summary_cards")
+        if card_records:
+            summary_cards = "".join(
+                f'<article class="summary-card"{_source_attrs(card["text"])}>'
+                f'<p class="summary-card-index">{card_index:02d}</p>'
+                f'<h3{_source_attrs(card["title"])}>{_claim_text(card["title"])}</h3>'
+                f'<p>{_claim_text(card["text"])}</p></article>'
+                for card_index, card in enumerate(card_records, start=1)
             )
-        )
+        else:
+            summary_cards = "".join(
+                f'<article class="summary-card"{_source_attrs(chapter["summary"])}>'
+                f'<p class="summary-card-index">{card_index:02d}</p>'
+                f'<h3>{_text(_summary_card_title(card_text))}</h3>'
+                f'<p>{_text(card_text)}</p></article>'
+                for card_index, card_text in enumerate(
+                    _summary_card_groups(chapter["summary"]["text"]),
+                    start=1,
+                )
+            )
         chapter_html.append(
             f'<section id="{_text(chapter["id"])}" class="chapter-section">'
             f'<div class="chapter-copy"><p class="chapter-index">SECTION {index:02d}</p>'
@@ -292,7 +341,7 @@ def _render_compact_page(blocks, metadata, media_source, manifest):
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:var(--color-canvas);color:var(--color-text);font:17px/1.72 var(--font-body);letter-spacing:.01em;background-image:radial-gradient(circle at 8% 8%,rgba(204,136,0,.13),transparent 24rem)}}
 a{{color:var(--color-primary-ink);font-weight:700;text-underline-offset:4px;text-decoration-thickness:2px}}a:hover{{color:var(--color-secondary-strong)}}a:focus-visible{{outline:3px solid var(--color-focus);outline-offset:4px;border-radius:2px}}.skip{{position:absolute;left:-9999px}}.skip:focus{{left:16px;top:16px;background:var(--color-surface);padding:12px 16px;z-index:10;box-shadow:var(--shadow-card)}}
 .compact-editorial{{max-width:1080px;margin:auto;padding:0 32px}}.page-header{{position:relative;padding:88px 0 56px;border-bottom:1px solid var(--color-line)}}.page-header:before{{content:"";position:absolute;inset:0 auto auto 0;width:96px;height:8px;background:var(--color-primary)}}.page-header:after{{content:"VISUAL / BRIEF";position:absolute;right:0;top:32px;color:var(--color-secondary);font:700 12px/1 var(--font-mono);letter-spacing:.14em}}.kicker,.chapter-index{{font:700 12px/1.3 var(--font-mono);color:var(--color-secondary-strong);letter-spacing:.12em;text-transform:uppercase}}
-h1{{max-width:900px;font:800 clamp(3rem,8vw,5.8rem)/.94 var(--font-display);letter-spacing:-.055em;text-wrap:balance;margin:18px 0 28px}}.overview{{max-width:46rem;font-size:1.16rem;line-height:1.8;margin:0 0 24px;color:var(--color-muted)}}.source-link{{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;background:var(--color-secondary);color:#fff;text-decoration:none;box-shadow:5px 5px 0 var(--color-primary)}}.source-link:hover{{background:var(--color-secondary-strong);color:#fff;transform:translate(-1px,-1px);box-shadow:7px 7px 0 var(--color-primary)}}.source-link:active{{transform:translate(2px,2px);box-shadow:3px 3px 0 var(--color-primary)}}
+h1{{max-width:900px;font:800 clamp(3rem,8vw,5.8rem)/.94 var(--font-display);letter-spacing:-.055em;text-wrap:balance;margin:18px 0 28px}}.one-line-overview{{max-width:50rem;margin:0 0 16px;font:800 clamp(1.35rem,3vw,2rem)/1.35 var(--font-display);color:var(--color-text)}}.overview{{max-width:46rem;font-size:1.08rem;line-height:1.8;margin:0 0 24px;color:var(--color-muted)}}.source-link{{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;background:var(--color-secondary);color:#fff;text-decoration:none;box-shadow:5px 5px 0 var(--color-primary)}}.source-link:hover{{background:var(--color-secondary-strong);color:#fff;transform:translate(-1px,-1px);box-shadow:7px 7px 0 var(--color-primary)}}.source-link:active{{transform:translate(2px,2px);box-shadow:3px 3px 0 var(--color-primary)}}
 .insights{{padding:48px 0 64px}}.section-label{{font:700 14px/1.3 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--color-line);padding-bottom:12px}}.insight-grid{{list-style:none;padding:0;margin:24px 0 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}}
 .insight-grid li{{position:relative;background:var(--color-surface);padding:24px;display:grid;grid-template-columns:40px 1fr;gap:12px;border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card);transition:transform .18s ease,box-shadow .18s ease}}.insight-grid li:hover{{transform:translateY(-3px);box-shadow:var(--shadow-lift)}}.insight-grid span{{color:var(--color-secondary-strong);font:700 13px/1.4 var(--font-mono)}}.insight-grid p{{margin:0;font-weight:600}}
 .chapter-stack{{padding:0 0 72px}}.chapter-section{{min-width:0;padding:56px 0 64px;border-top:1px solid var(--color-line);break-inside:avoid}}.chapter-copy{{max-width:780px;margin-bottom:28px}}.chapter-copy h2{{font:800 clamp(2rem,4vw,3rem)/1.06 var(--font-display);letter-spacing:-.035em;text-wrap:balance;overflow-wrap:anywhere;margin:12px 0 20px}}
@@ -306,11 +355,12 @@ h1{{max-width:900px;font:800 clamp(3rem,8vw,5.8rem)/.94 var(--font-display);lett
 .metrics-diagram{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}}.metrics-diagram>div{{background:var(--color-text);color:#fff;padding:20px;display:grid;border-bottom:6px solid var(--color-primary)}}.metrics-diagram strong{{font:800 2.2rem/1 var(--font-display);color:#FFD58A}}.metrics-diagram span{{font-size:.8rem;margin-top:8px}}
 .layered-diagram{{display:flex;flex-direction:column-reverse;gap:7px}}.layered-diagram>div{{padding:14px 16px;background:var(--color-cream);border-bottom:3px solid var(--color-primary);display:flex;gap:12px;justify-content:center}}.layered-diagram>div:nth-child(2){{margin-inline:7%}}.layered-diagram>div:nth-child(3){{margin-inline:14%}}
 .editorial-text-treatment{{padding:22px;border-left:6px solid var(--color-primary);background:var(--color-cream);color:var(--color-text)}}footer{{padding:40px 0 64px;border-top:1px solid var(--color-line);font:600 12px/1.5 var(--font-mono);color:var(--color-muted);letter-spacing:.04em}}
-@media(max-width:680px){{body{{font-size:16px}}.compact-editorial{{padding:0 18px}}.page-header{{padding:64px 0 42px}}.page-header:after{{top:24px}}h1{{font-size:clamp(2.7rem,15vw,4.2rem);overflow-wrap:anywhere}}.insight-grid,.summary-card-grid{{grid-template-columns:1fr}}.chapter-section{{padding:44px 0 52px}}.summary-card{{padding:20px}}.comparison-diagram{{grid-template-columns:1fr}}.editorial-visual{{padding:18px}}}}
+.deep-interpretation{{padding:64px 0 72px;border-top:1px solid var(--color-line)}}.deep-interpretation>h2,.reflection-grid h2{{font:800 clamp(1.8rem,4vw,2.7rem)/1.08 var(--font-display);letter-spacing:-.03em;margin:26px 0 20px}}.takeaway-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}}.interpretation-card{{min-width:0;padding:22px;background:var(--color-surface);border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card)}}.interpretation-card h3{{margin:0 0 10px;font:800 1.16rem/1.3 var(--font-display)}}.interpretation-card p{{margin:0;color:var(--color-muted)}}.critical-card{{border-top-color:var(--color-secondary);background:var(--color-surface-apricot)}}.question-card{{border-top-color:var(--color-text);background:var(--color-cream)}}.reflection-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin-top:40px}}.reflection-list{{display:grid;gap:12px}}
+@media(max-width:680px){{body{{font-size:16px}}.compact-editorial{{padding:0 18px}}.page-header{{padding:64px 0 42px}}.page-header:after{{top:24px}}h1{{font-size:clamp(2.7rem,15vw,4.2rem);overflow-wrap:anywhere}}.insight-grid,.summary-card-grid,.takeaway-grid,.reflection-grid{{grid-template-columns:1fr}}.chapter-section{{padding:44px 0 52px}}.summary-card{{padding:20px}}.comparison-diagram{{grid-template-columns:1fr}}.editorial-visual{{padding:18px}}}}
 @media(hover:none){{.insight-grid li:hover{{transform:none;box-shadow:var(--shadow-card)}}}}@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}*,*:before,*:after{{scroll-behavior:auto!important;transition:none!important}}}}@media print{{body{{background:#fff;background-image:none}}.compact-editorial{{max-width:none}}.summary-card-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}.summary-card,.editorial-visual{{box-shadow:none}}}}
 </style></head><body><a class="skip" href="#content">跳至正文</a><main id="content" class="compact-editorial">
-<header class="page-header"><p class="kicker">TRANSCRIPT INTERPRETATION</p><h1>{title}</h1><p class="overview"{_source_attrs(manifest["overview"])}>{_claim_text(manifest["overview"])}</p>{source_link}</header>
-<section class="insights"><p class="section-label">核心结论</p><ol class="insight-grid">{insights}</ol></section><div class="chapter-stack">{''.join(chapter_html)}</div>
+<header class="page-header"><p class="kicker">TRANSCRIPT INTERPRETATION</p><h1>{title}</h1><p class="one-line-overview"{_source_attrs(one_line)}>{_claim_text(one_line)}</p><p class="overview"{_source_attrs(manifest["overview"])}>{_claim_text(manifest["overview"])}</p>{source_link}</header>
+<section class="insights"><p class="section-label">核心结论</p><ol class="insight-grid">{insights}</ol></section><div class="chapter-stack">{''.join(chapter_html)}</div>{interpretation}
 <footer>基于完整校对转写稿整理 · {len(blocks)} 个来源窗口</footer></main></body></html>'''
 
 
@@ -318,6 +368,8 @@ def _render_page(blocks, timeline_report, metadata, media_source, manifest,
                  frames_by_chapter, assets_name):
     title = _text(metadata.get("title", "Visual brief"))
     language = _text(metadata.get("language", "zh-CN"))
+    one_line = manifest.get("one_line_overview", manifest["overview"])
+    interpretation = _render_interpretation_sections(manifest, metadata.get("language", "zh-CN"))
     insights = "".join(
         f'<li{_source_attrs(item)}>{_claim_text(item)}</li>'
         for item in manifest.get("core_insights", [])
@@ -389,22 +441,23 @@ def _render_page(blocks, timeline_report, metadata, media_source, manifest,
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;color:var(--color-text);background:var(--color-canvas);font:16px/1.68 var(--font-body);background-image:linear-gradient(90deg,rgba(204,136,0,.06) 1px,transparent 1px);background-size:32px 32px}}
 a{{color:var(--color-primary-ink);font-weight:700;text-underline-offset:4px}}a:hover{{color:var(--color-secondary-strong)}}a:focus-visible,summary:focus-visible,button:focus-visible,input:focus-visible{{outline:3px solid var(--color-focus);outline-offset:3px}}
 .skip{{position:absolute;left:-9999px}}.skip:focus{{left:16px;top:16px;background:var(--color-surface);padding:12px 16px;z-index:10;box-shadow:var(--shadow-card)}}
-header{{position:relative;color:#fff;background:var(--color-secondary);padding:72px max(24px,calc((100% - 1240px)/2));border-bottom:10px solid var(--color-primary)}}header:after{{content:"OFFLINE / VISUAL BRIEF";position:absolute;right:max(24px,calc((100% - 1240px)/2));top:28px;font:700 12px/1 var(--font-mono);letter-spacing:.14em;color:#FFE1B0}}header>p:first-child{{font:700 12px/1.4 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:#FFE1B0}}h1{{max-width:900px;font:800 clamp(2.8rem,7vw,5.4rem)/.96 var(--font-display);letter-spacing:-.05em;text-wrap:balance;margin:16px 0 24px}}.overview{{max-width:68ch;font-size:1.12rem;color:#FFF8EE}}header .source-link{{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;background:var(--color-cream);color:var(--color-secondary-strong);text-decoration:none;box-shadow:5px 5px 0 #733019}}header .source-link:hover{{background:#fff;color:var(--color-secondary-strong);transform:translate(-1px,-1px)}}
+header{{position:relative;color:#fff;background:var(--color-secondary);padding:72px max(24px,calc((100% - 1240px)/2));border-bottom:10px solid var(--color-primary)}}header:after{{content:"OFFLINE / VISUAL BRIEF";position:absolute;right:max(24px,calc((100% - 1240px)/2));top:28px;font:700 12px/1 var(--font-mono);letter-spacing:.14em;color:#FFE1B0}}header>p:first-child{{font:700 12px/1.4 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:#FFE1B0}}h1{{max-width:900px;font:800 clamp(2.8rem,7vw,5.4rem)/.96 var(--font-display);letter-spacing:-.05em;text-wrap:balance;margin:16px 0 24px}}.one-line-overview{{max-width:58rem;font:800 clamp(1.3rem,2.6vw,1.9rem)/1.35 var(--font-display);color:#fff}}.overview{{max-width:68ch;font-size:1.05rem;color:#FFF8EE}}header .source-link{{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;background:var(--color-cream);color:var(--color-secondary-strong);text-decoration:none;box-shadow:5px 5px 0 #733019}}header .source-link:hover{{background:#fff;color:var(--color-secondary-strong);transform:translate(-1px,-1px)}}
 .layout{{display:grid;grid-template-columns:minmax(200px,240px) minmax(0,760px) minmax(190px,220px);gap:28px;max-width:1240px;margin:auto;padding:40px 24px}}
 nav,aside{{position:sticky;top:20px;align-self:start;background:var(--color-surface);padding:20px;border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card)}}nav h2,aside h2{{font:700 13px/1.3 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;margin:0 0 16px}}nav ol{{padding-left:22px;margin-bottom:0}}nav li+li{{margin-top:10px}}main{{min-width:0}}main>section:first-child{{padding:24px 28px;margin-bottom:24px;background:var(--color-text);color:#fff;border-bottom:6px solid var(--color-primary);box-shadow:var(--shadow-card)}}main>section:first-child h2{{margin-top:0;font-family:var(--font-display)}}.chapter{{padding:32px;margin:0 0 24px;background:var(--color-surface);border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card)}}.chapter:nth-of-type(2n+3){{border-top-color:var(--color-secondary)}}.chapter h2{{font:800 clamp(1.8rem,4vw,2.5rem)/1.05 var(--font-display);letter-spacing:-.03em;text-wrap:balance;margin:0 0 16px}}
 .mobile-chapter-nav{{display:none}}
 .evidence{{padding:16px 16px 16px 34px;background:var(--color-cream);border-left:4px solid var(--color-primary)}}.evidence-window{{color:var(--color-secondary-strong);font:700 13px/1.4 var(--font-mono)}}.visual{{margin:24px 0 0;padding:20px;background:var(--color-cream);border:1px solid var(--color-line);border-top:5px solid var(--color-primary)}}figcaption{{font:700 1.08rem/1.4 var(--font-display);margin-bottom:14px}}blockquote{{margin:0;padding:16px 20px;background:var(--color-surface);border-left:5px solid var(--color-secondary);font-size:1.1rem}}
 .editorial-insight{{margin:24px 0;padding:20px;border-left:6px solid var(--color-secondary);background:var(--color-cream)}}
+.deep-interpretation{{padding:32px;margin:0 0 24px;background:var(--color-surface);border-top:6px solid var(--color-secondary);box-shadow:var(--shadow-card)}}.deep-interpretation>.section-label{{font:700 12px/1.3 var(--font-mono);color:var(--color-secondary-strong);letter-spacing:.08em;text-transform:uppercase}}.deep-interpretation>h2,.reflection-grid h2{{font:800 1.7rem/1.15 var(--font-display)}}.takeaway-grid,.reflection-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}.interpretation-card{{padding:18px;background:var(--color-cream);border-top:5px solid var(--color-primary)}}.interpretation-card h3{{margin:0 0 8px;font:800 1.05rem/1.3 var(--font-display)}}.interpretation-card p{{margin:0;color:var(--color-muted)}}.reflection-grid{{margin-top:28px}}.reflection-list{{display:grid;gap:10px}}.critical-card{{border-top-color:var(--color-secondary)}}.question-card{{border-top-color:var(--color-text)}}
 .source-frame{{margin:24px 0}}.source-frame img{{display:block;width:100%;height:auto;aspect-ratio:var(--frame-ratio,16/9);object-fit:contain;background:var(--color-text);border:6px solid var(--color-text)}}.source-frame figcaption{{padding:10px 0 0}}
 .comparison-visual>div,.relationship-visual>div,.metrics-visual>div{{display:flex;gap:16px;justify-content:space-between;border-top:1px solid var(--color-line);padding:12px 0}}.metrics-visual>div strong{{font:800 1.8rem/1 var(--font-display);color:var(--color-secondary-strong)}}
 details{{margin-top:20px;background:var(--color-surface);border-top:6px solid var(--color-primary);box-shadow:var(--shadow-card)}}summary{{cursor:pointer;font-weight:700;min-height:44px;padding:12px 16px}}details[open] summary{{border-bottom:1px solid var(--color-line)}}
 .search{{display:grid;gap:8px;margin:16px 0}}.search span{{font:700 12px/1.4 var(--font-mono)}}input[type=search]{{width:100%;min-height:44px;padding:10px 12px;color:var(--color-text);background:var(--color-cream);border:2px solid var(--color-line);border-radius:2px}}input[type=search]:hover{{border-color:var(--color-primary)}}input[type=search]:focus{{background:#fff;border-color:var(--color-focus)}}svg.icon{{width:1em;height:1em;vertical-align:-.1em;margin-right:6px}}
-@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}*,*:before,*:after{{scroll-behavior:auto!important;transition:none!important}}}}@media(max-width:900px){{header{{padding-block:60px 48px}}.layout{{grid-template-columns:minmax(0,1fr);padding:24px 18px}}nav,aside{{position:static}}.desktop-navigation{{display:none}}.mobile-chapter-nav{{display:block;margin:0}}.chapter{{padding:24px}}}}@media(max-width:560px){{header:after{{display:none}}h1{{overflow-wrap:anywhere}}.chapter{{padding:20px}}.comparison-visual>div,.relationship-visual>div,.metrics-visual>div{{align-items:flex-start;flex-direction:column;gap:4px}}}}@media print{{body{{background:#fff;background-image:none}}header{{color:var(--color-text);background:#fff;border-bottom:4px solid var(--color-primary)}}header .overview{{color:var(--color-text)}}nav,aside,.mobile-chapter-nav,script{{display:none}}.layout{{display:block;max-width:none;padding:0}}main>section:first-child{{color:var(--color-text);background:#fff;box-shadow:none}}.chapter{{box-shadow:none;break-inside:avoid}}}}
+@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}*,*:before,*:after{{scroll-behavior:auto!important;transition:none!important}}}}@media(max-width:900px){{header{{padding-block:60px 48px}}.layout{{grid-template-columns:minmax(0,1fr);padding:24px 18px}}nav,aside{{position:static}}.desktop-navigation{{display:none}}.mobile-chapter-nav{{display:block;margin:0}}.chapter{{padding:24px}}}}@media(max-width:560px){{header:after{{display:none}}h1{{overflow-wrap:anywhere}}.chapter{{padding:20px}}.comparison-visual>div,.relationship-visual>div,.metrics-visual>div{{align-items:flex-start;flex-direction:column;gap:4px}}.takeaway-grid,.reflection-grid{{grid-template-columns:1fr}}}}@media print{{body{{background:#fff;background-image:none}}header{{color:var(--color-text);background:#fff;border-bottom:4px solid var(--color-primary)}}header .overview,header .one-line-overview{{color:var(--color-text)}}nav,aside,.mobile-chapter-nav,script{{display:none}}.layout{{display:block;max-width:none;padding:0}}main>section:first-child{{color:var(--color-text);background:#fff;box-shadow:none}}.chapter{{box-shadow:none;break-inside:avoid}}}}
 </style></head><body><svg width="0" height="0" aria-hidden="true" focusable="false"><symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 5 5" fill="none" stroke="currentColor" stroke-width="2"/></symbol></svg><a class="skip" href="#content">Skip to content</a>
-<header><p>Offline visual brief</p><h1>{title}</h1><p class="overview"{_source_attrs(manifest["overview"])}>{_claim_text(manifest["overview"])}</p>{source_link}</header>
+<header><p>Offline visual brief</p><h1>{title}</h1><p class="one-line-overview"{_source_attrs(one_line)}>{_claim_text(one_line)}</p><p class="overview"{_source_attrs(manifest["overview"])}>{_claim_text(manifest["overview"])}</p>{source_link}</header>
 <div class="layout"><nav class="desktop-navigation" aria-label="Chapter navigation"><h2>Chapter navigation</h2><label class="search" for="chapter-search"><span><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>Search chapters</span><input id="chapter-search" data-chapter-search type="search" autocomplete="off"></label><ol>{navigation}</ol></nav>
 <details class="mobile-chapter-nav"><summary>Chapter navigation</summary><label class="search" for="mobile-chapter-search"><span><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>Search chapters</span><input id="mobile-chapter-search" data-chapter-search type="search" autocomplete="off"></label><ol>{navigation}</ol></details>
-<main id="content"><section><h2>Core insights</h2><ul>{insights}</ul></section>{''.join(chapters)}</main>
+<main id="content"><section><h2>Core insights</h2><ul>{insights}</ul></section>{''.join(chapters)}{interpretation}</main>
 <aside><h2>Current chapter</h2><p id="current-chapter-title"{_source_attrs(manifest["chapters"][0]["title"])}>{_claim_text(manifest["chapters"][0]["title"])}</p><p>{len(blocks)} calibrated source windows</p><p>{_text(metadata.get("duration", ""))}</p></aside></div>
 <script type="application/json" id="visual-brief-data">{page_data}</script><script>
 document.documentElement.classList.add('js');
@@ -566,6 +619,14 @@ def render_visual_brief(*, calibrated_transcript_blocks, validated_timeline_repo
         staged_html = stage_root / destination.name
         compact = _is_compact_profile(blocks, trusted_metadata)
         if compact:
+            if any(
+                not isinstance(chapter.get("summary_cards"), list)
+                or not 3 <= len(chapter["summary_cards"]) <= 5
+                for chapter in manifest["chapters"]
+            ):
+                raise VisualStageError(
+                    "compact editorial output requires 3-5 interpretive summary cards per chapter"
+                )
             if frame_assets:
                 raise VisualStageError("compact editorial output rejects frame assets")
             if any(

@@ -38,7 +38,7 @@ All routes share `visual_brief.py` and `visual_reader.py`. Never create route-sp
 
 ## 3. Manifest and evidence rules
 
-Required document fields are `version`, `overview`, `core_insights`, and `chapters`. `overview`, each core insight, chapter `title`/`summary`, visual `title`, and process/concept item use a strict `SourcedText` object with exactly non-empty `text` and non-empty `source_windows`. Every chapter requires `id`, `title`, `summary`, `source_windows`, `evidence`, and `visuals`; video chapters may add integer `frame_priority` from 0 to 100. Each comparison/relationship item also requires `source_windows`; metrics and quotes keep their exact `source_window`.
+New output uses manifest v2; v1 remains supported only for existing manifests. Required v2 fields are `version`, `one_line_overview`, `overview`, `core_insights`, `developer_takeaways`, `critical_thinking`, `further_questions`, and `chapters`. The one-line overview is a sourced conclusion of at most 50 characters. Each interpretive item contains exactly `title`, `text`, and `source_windows`. Developer takeaways contain 4–5 items covering RAG/context engineering, model training/data, Agent construction/reliability, and an Agent-development learning path. Critical thinking and further questions each contain 2–4 items. `overview`, each core insight, chapter `title`/`summary`, visual `title`, and process/concept item use a strict `SourcedText` object with exactly non-empty `text` and non-empty `source_windows`. Every chapter requires `id`, `title`, `summary`, `source_windows`, `evidence`, and `visuals`; video chapters may add integer `frame_priority` from 0 to 100. Each comparison/relationship item also requires `source_windows`; metrics and quotes keep their exact `source_window`.
 
 - Flattened chapter windows must exactly equal transcript windows: no missing, duplicate, overlapping, or reordered windows.
 - A chapter may group only adjacent transcript windows.
@@ -49,7 +49,7 @@ Required document fields are `version`, `overview`, `core_insights`, and `chapte
 - Use `visuals: []` when evidence supports no visual. The fixed renderer provides an editorial insight presentation.
 - Every visible claim, diagram item, edge, and label must reference real windows inside its chapter; overview/core insights may reference real windows across the transcript.
 - Short content is bounded to 6 core insights and 5 visuals; long content to 10 insights and 8 visuals. These are ceilings, not quotas.
-- For sources over 60 minutes whose calibrated transcript has at least as many CJK characters as ASCII Latin letters, use the compact editorial profile: exactly 4 insights, 5 adjacent-window chapters, 1,800–2,500 visible CJK characters, at most 2 visuals per chapter, and at most 8 overall. Deterministically map `process` to flow/timeline, `comparison` to split comparison, cyclic `relationship` to flywheel, other relationships to network, `metrics` to metric strips, and `concept` to layered diagrams.
+- For sources over 60 minutes whose calibrated transcript has at least as many CJK characters as ASCII Latin letters, use the compact editorial profile: v2 requires exactly 4 insights, 5 adjacent-window chapters, 2,600–3,800 visible CJK characters, at most 2 visuals per chapter, and at most 8 overall. Legacy v1 keeps the original 1,800–2,500 range. Deterministically map `process` to flow/timeline, `comparison` to split comparison, cyclic `relationship` to flywheel, other relationships to network, `metrics` to metric strips, and `concept` to layered diagrams.
 
 The schema is a strict allowlist. Reject model HTML, JavaScript, CSS, SVG, absolute paths, and traversal before publication.
 
@@ -73,6 +73,8 @@ The regular reader contains overview, core insights, chapter navigation, evidenc
 
 - The visual intent is a warm, confident, modern editorial poster. Use semantic tokens: amber `--color-primary: #CC8800`, burnt orange `--color-secondary: #C55221`, surface `#FFFFFF`, and text `#111827`; body copy must not depend on ad hoc raw colors.
 - The compact profile uses a cream canvas and distinct SECTION groups. Each chapter keeps its title and source tags above a deterministic 3–5 card split of the complete summary, using semantic sentence boundaries and a two-column white-card grid. Concatenating card bodies in order must reproduce the original summary exactly. Infographics span the full width below the cards; below 680px the content cards become one column. The regular reader uses a burnt-orange hero, cream grid canvas, and white navigation/chapter cards. Both profiles share one typography, color, spacing, and focus language.
+- Every compact content card explicitly provides `title` and `text` as `SourcedText`. The 4–24 character title answers “what does this show / why does it matter” with a takeaway, contrast, causal claim, or action. It must not equal the body, copy or truncate the body opening, add an ellipsis to the first clause, or merely paraphrase that opening. Concatenating all card `text` fields must still reproduce the chapter `summary` exactly.
+- The v2 Reader adds a “From insight to action” section after the chapters: 4–5 developer takeaways plus parallel “Assumptions to validate” and “Questions to explore” groups. Each item must lead to an engineering action, validation method, or decision and retain evidence windows.
 - Display typography prefers Chakra Petch and mono typography prefers JetBrains Mono. Never fetch fonts over the network; use the system fallbacks declared in the embedded CSS.
 - Interactive links, search inputs, and disclosures have a minimum 44px touch target. Links provide default, hover, focus-visible, and active states where relevant; search provides default, hover, and focus-visible states.
 - Escape every untrusted string.
@@ -118,7 +120,8 @@ The prepare stage requires the exact expected batch filename set. Missing, extra
 ## 8. Visual and accessibility QA
 
 - [ ] No horizontal scrolling at 375, 390, 768, 1024, or 1440px; long titles wrap without colliding with decorative copy.
-- [ ] Each compact chapter summary becomes 3–5 two-column content cards and collapses to one column below 680px; concatenating all card bodies exactly reproduces the original summary, and infographics span the width below.
+- [ ] Each compact chapter summary becomes 3–5 two-column content cards and collapses to one column below 680px; titles add interpretation instead of repeating body openings, concatenating all card bodies exactly reproduces the original summary, and infographics span the width below.
+- [ ] V2 includes a one-line overview, core insights, at least four developer-learning directions, critical thinking, and further questions; each takeaway explains what, why, and how.
 - [ ] All six infographic types, text fallback, video frames, navigation, search, and source links use the same semantic tokens.
 - [ ] Tab reaches the skip link, every link, search, and disclosure; focus outlines are at least 3px and never clipped.
 - [ ] Touch targets are at least 44px; `prefers-reduced-motion` removes smooth scrolling and hover transitions.
