@@ -292,6 +292,6 @@ python scripts/mimo_podcast_tool.py --help
 
 当前发布还通过了：
 
-- `python -m unittest discover -s tests -v`：114 个测试
+- `python -m unittest discover -s tests -v`：115 个测试
 - skill-judge：`116/120（A）`
 - SkillOpt skillquality gate：`hard=1.0000`、`soft=1.0000`（17/17）

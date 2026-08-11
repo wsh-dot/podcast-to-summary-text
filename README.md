@@ -14,7 +14,7 @@
 - 支持按 provider 独立保存 MiMo、阿里 Qwen、阿里 Fun-ASR-Flash、阶跃星辰和腾讯 ASR 凭据。
 - 默认媒体解析同时生成转写 TXT、逐窗口 Markdown 时间线和完全离线 HTML 图文速览；只有明确“只转写”时才缩减产物。
 - HTML 使用 VisualBriefManifest v2，包含一句话总览、核心要点、开发启发、批判性思考和延伸问题。
-- 已通过 114 个单元测试、脚本自检，以及 skill-judge `116/120（A）` 和 SkillOpt skillquality `17/17` 验证。
+- 已通过 115 个单元测试、脚本自检，以及 skill-judge `116/120（A）` 和 SkillOpt skillquality `17/17` 验证。
 
 它适合长音频和长视频内容。最终报告会包含：
 
