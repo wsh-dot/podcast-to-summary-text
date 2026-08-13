@@ -183,7 +183,6 @@ BBDOWN_ASSETS = {
 LLM_MAX_TOKENS_STANDARD = 4096
 LLM_MAX_TOKENS_PROOFREAD_BATCH = 8192
 LLM_MAX_TOKENS_TIMELINE_BATCH = 8192
-LLM_MAX_TOKENS_FINAL_TABLE = 4096
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2
@@ -1471,23 +1470,6 @@ def run_self_test():
                     for window in windows
                 )
 
-            if "逐窗口正文：" in prompt:
-                if "force-bad-table" in prompt:
-                    return "not a table"
-                headings = re.findall(
-                    r"^##\s+(\d{2}:\d{2}-\d{2}:\d{2})\s+(.+)$",
-                    prompt,
-                    flags=re.MULTILINE,
-                )
-                rows = [
-                    "## 核心观点速览",
-                    "",
-                    "| 时间 | 章节 | 核心观点 | 关键论据 / 金句 |",
-                    "|------|------|----------|------------------|",
-                ]
-                for window, title in headings:
-                    rows.append(f"| {window} | {title} | 核心观点 | 依据正文 |")
-                return "\n".join(rows)
 
             windows = re.findall(r"^- (\d{2}:\d{2}-\d{2}:\d{2})$", prompt, flags=re.MULTILINE)
             repair = "缺失窗口修复任务" in prompt
@@ -1496,7 +1478,11 @@ def run_self_test():
                 windows.append("09:99-10:00")
                 self.omitted_once = True
             return "\n\n".join(
-                f"## {window} 测试主题\n\n这里概括 {window} 窗口的内容、重要性和论据。"
+                f"## {window} 测试主题\n\n"
+                f"这里概括 {window} 窗口的内容、重要性和论据。\n\n"
+                f"> **核心观点**：{window} 的核心结论具有明确依据。\n"
+                f"> **关键论据 / 金句**：论据：校对后文本说明该窗口内容保持原意。 "
+                f"<!--依据：“校对后文本：{window} 内容已经补充标点、修正术语，并保持原意。”-->"
                 for window in windows
             )
 
@@ -1521,17 +1507,20 @@ def run_self_test():
 
     metadata["transcript_stage"] = "calibrated"
     report = generate_timeline_report(FakeLLM(), calibrated, metadata, batch_size=2, detailed=False)
-    validation = validate_timeline_report(blocks, report)
+    calibrated_blocks = parse_transcript_blocks(calibrated)
+    validation = validate_timeline_report(calibrated_blocks, report)
     assert validation["expected_count"] == 3, validation
     assert validation["found_count"] == 3, validation
     assert not validation["missing"], validation
     assert not validation["extra"], validation
     assert not validation["duplicates"], validation
     assert validation["has_core_table"], validation
+    assert validation["core_table_valid"], validation
     assert "09:99-10:00" not in report
     assert "00:03-00:06 测试主题" in report
+    assert "> **核心观点**" not in report
 
-    fallback = fallback_core_table(blocks, split_report_sections(report)[0])
+    fallback = fallback_core_table(calibrated_blocks, split_report_sections(report)[0])
     assert "| 时间 | 章节 | 核心观点 | 关键论据 / 金句 |" in fallback
     assert "00:06-00:07" in fallback
 
@@ -1553,12 +1542,34 @@ def run_self_test():
 
         manual_sections = prompt_root / "sections"
         sections_by_window, _duplicates = split_report_sections(report)
+
+        def with_selftest_row_metadata(window):
+            source_by_window = {
+                "00:00-00:03": "开场介绍。",
+                "00:03-00:06": "讨论核心问题。",
+                "00:06-00:07": "收尾总结。",
+            }
+            detail_by_window = {
+                "00:00-00:03": "本窗口完成节目的开场介绍。",
+                "00:03-00:06": "本窗口进入核心问题的讨论。",
+                "00:06-00:07": "本窗口完成节目的收尾总结。",
+            }
+            return (
+                sections_by_window[window]
+                + f"\n\n> **核心观点**：{window} 的手动合并结论有明确依据。"
+                + f"\n> **关键论据 / 金句**：背景：{detail_by_window[window]} "
+                + f"<!--依据：“{source_by_window[window]}”-->"
+            )
+
         (manual_sections / "batch_001.md").write_text(
-            "\n\n".join(sections_by_window[window] for window in ("00:00-00:03", "00:03-00:06")),
+            "\n\n".join(
+                with_selftest_row_metadata(window)
+                for window in ("00:00-00:03", "00:03-00:06")
+            ),
             encoding="utf-8",
         )
         (manual_sections / "batch_002.md").write_text(
-            sections_by_window["00:06-00:07"],
+            with_selftest_row_metadata("00:06-00:07"),
             encoding="utf-8",
         )
         manual_report = generate_manual_report(transcript, metadata, manual_sections)
@@ -1943,6 +1954,11 @@ def validate_timeline_report(transcript_or_blocks, report):
         re.search(r"^##\s+核心观点速览\b", report or "", flags=re.MULTILINE) is not None
         and "| 时间 | 章节 | 核心观点 | 关键论据 / 金句 |" in (report or "")
     )
+    core_table = validate_core_table(blocks, report) if has_core_table else {
+        "valid": False,
+        "errors": ["missing core table"],
+        "rows": [],
+    }
     return {
         "expected_count": len(expected),
         "found_count": len(found),
@@ -1950,17 +1966,28 @@ def validate_timeline_report(transcript_or_blocks, report):
         "extra": [window for window in found if window not in expected_set],
         "duplicates": duplicates,
         "has_core_table": has_core_table,
+        "core_table_valid": core_table["valid"],
+        "core_table": core_table,
     }
 
 
 def validate_section_map(blocks, sections_by_window):
     expected = [block["window"] for block in blocks]
     found = set(sections_by_window)
+    invalid_row_metadata = {}
+    for block in blocks:
+        window = block["window"]
+        if window not in sections_by_window:
+            continue
+        issues = validate_section_row_metadata(block, sections_by_window[window])
+        if issues:
+            invalid_row_metadata[window] = issues
     return {
         "expected_count": len(expected),
         "found_count": len(found),
         "missing": [window for window in expected if window not in found],
         "extra": [window for window in found if window not in set(expected)],
+        "invalid_row_metadata": invalid_row_metadata,
     }
 
 
@@ -1970,44 +1997,118 @@ def section_title(section):
     return (match.group(1).strip() if match else "窗口摘要").replace("|", " ")
 
 
-def section_first_claim(section):
-    for line in (section or "").splitlines()[1:]:
-        line = line.strip()
-        if not line or line.startswith(">") or line.startswith("#"):
+TIMELINE_CORE_LINE_RE = re.compile(
+    r"^>\s*\*\*核心观点\*\*[：:]\s*(.+?)\s*$",
+    flags=re.MULTILINE,
+)
+TIMELINE_SUPPORT_LINE_RE = re.compile(
+    r"^>\s*\*\*关键论据\s*/\s*金句\*\*[：:]\s*(.+?)\s*$",
+    flags=re.MULTILINE,
+)
+
+
+def timeline_row_metadata(section):
+    core_match = TIMELINE_CORE_LINE_RE.search(section or "")
+    support_match = TIMELINE_SUPPORT_LINE_RE.search(section or "")
+    return {
+        "core_claim": core_match.group(1).strip() if core_match else "",
+        "support": support_match.group(1).strip() if support_match else "",
+    }
+
+
+def strip_timeline_row_metadata(section):
+    lines = []
+    for line in (section or "").splitlines():
+        if TIMELINE_CORE_LINE_RE.fullmatch(line) or TIMELINE_SUPPORT_LINE_RE.fullmatch(line):
             continue
-        claim = line.replace("|", " ")
-        return claim if len(claim) <= 80 else claim[:79].rstrip() + "…"
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def section_body_sentences(section):
+    body_lines = []
+    for line in strip_timeline_row_metadata(section).splitlines()[1:]:
+        line = line.strip()
+        if not line or line.startswith((">", "#")):
+            continue
+        body_lines.append(line)
+    return source_sentences("\n".join(body_lines))
+
+
+def section_first_claim(section):
+    metadata_claim = timeline_row_metadata(section)["core_claim"]
+    if metadata_claim:
+        return metadata_claim.replace("|", "｜")
+    for sentence in section_body_sentences(section):
+        claim = sentence.strip().replace("|", "｜")
+        if claim:
+            return claim
     return "该窗口内容较少或转写质量有限。"
 
 
 CORE_QUOTE_CUES = (
-    "我觉得",
     "最重要",
     "关键",
     "真正",
     "本质",
+    "原因",
     "不是",
     "而是",
     "意味着",
+    "如果",
+    "只有",
     "应该",
     "不能",
+    "必须",
     "因为",
     "所以",
 )
-TRANSCRIPT_PLACEHOLDER_MARKERS = (
-    "未返回可用转写",
-    "无可用转写",
-    "没有有效语音",
-    "转写失败",
+TRANSCRIPT_PLACEHOLDER_RE = re.compile(
+    r"^(?:此|本)?窗口?(?:未返回|没有|无)(?:可用|有效)?"
+    r"(?:语音|转写(?:文本)?|文本)$|^(?:ASR)?转写失败$",
+    flags=re.IGNORECASE,
 )
-CORE_QUOTE_MAX_LENGTH = 120
+CORE_QUOTE_MIN_LENGTH = 15
+CORE_QUOTE_MAX_LENGTH = 140
+INCOMPLETE_QUOTE_ENDINGS = ("，", ",", "：", ":", "、", "—", "-", "…")
+DISCOURSE_PREFIX_RE = re.compile(
+    r"^(?:(?:嗯+|呃+|啊+|对+)(?:[，,、：:\s]+|$)|"
+    r"(?:我觉得|我感觉|就是说|就是|换句话说|然后|所以说|比如说|你看|"
+    r"一个阶段就是)[，,、：:\s]*)+",
+    flags=re.IGNORECASE,
+)
+AMBIGUOUS_QUOTE_PREFIX_RE = re.compile(
+    r"^(?:而是|但是|所以|因为|然后|甚至|同时|还有|"
+    r"这(?:件事|个事|个事情|种可能性)|"
+    r"它(?:是|也|就|并|可能|虽然)|这个(?:就是|其实|事情))"
+)
+LOW_VALUE_QUOTE_PREFIX_RE = re.compile(
+    r"^(?:大家好|今天我们的嘉宾|今天我邀请|那今天我邀请|嘉宾是|接下来|"
+    r"我叫|你是不是|你觉得|我想先|那我问|能不能|为什么|请你|介绍一下)"
+)
+GENERIC_EVIDENCE_MARKERS = (
+    "依据正文",
+    "依据转写",
+    "支撑细节",
+    "该窗口内容较少",
+    "该窗口内容有限",
+)
+NO_EVIDENCE_TEXT = "无可用证据（该窗口无有效转写）"
+GROUNDED_SUPPORT_RE = re.compile(
+    r"^(论据|背景)[：:]\s*(.+?)\s*"
+    r"<!--\s*依据[：:]\s*[“\"](.+?)[”\"]\s*-->$"
+)
 
 
 def source_sentences(text):
     return [
-        sentence.strip()
-        for sentence in re.split(r"(?<=[。！？!?；;，,])\s*|\n+", text or "")
-        if sentence.strip()
+        match.group(0).strip()
+        for match in re.finditer(
+            r".+?(?:[。！？!?]+|\.(?!\d)|\n+|$)",
+            text or "",
+            flags=re.DOTALL,
+        )
+        if match.group(0).strip()
     ]
 
 
@@ -2023,31 +2124,71 @@ def relevance_terms(text):
 
 def bounded_source_passages(text, max_length=CORE_QUOTE_MAX_LENGTH):
     passages = []
-    stride = max_length // 2
     for sentence in source_sentences(text):
-        if len(sentence) > max_length:
-            for chunk_start in range(0, len(sentence), stride):
-                passage = sentence[chunk_start:chunk_start + max_length]
-                if len(passage) >= 8:
-                    passages.append(passage)
-                if chunk_start + max_length >= len(sentence):
-                    break
-            continue
-        passages.append(sentence)
-    return passages
+        clauses = re.split(r"(?<=[，,：:])", sentence)
+        suffixes = [sentence]
+        suffixes.extend("".join(clauses[index:]) for index in range(1, len(clauses)))
+        for passage in suffixes:
+            trimmed = DISCOURSE_PREFIX_RE.sub("", passage).strip()
+            if CORE_QUOTE_MIN_LENGTH <= len(trimmed) <= max_length:
+                passages.append(trimmed)
+    return list(dict.fromkeys(passages))
+
+
+def window_has_usable_speech(block_text):
+    text = (block_text or "").strip()
+    if not text:
+        return False
+    normalized = re.sub(r"^[（(\[【\s]+|[。.!！）)\]】\s]+$", "", text).strip()
+    if TRANSCRIPT_PLACEHOLDER_RE.fullmatch(normalized):
+        return False
+    return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text)) >= 2
+
+
+def quote_quality_issues(quote, block_text):
+    quote = (quote or "").strip()
+    issues = []
+    if quote not in (block_text or ""):
+        issues.append("quote is not an exact span from its transcript window")
+    if not (CORE_QUOTE_MIN_LENGTH <= len(quote) <= CORE_QUOTE_MAX_LENGTH):
+        issues.append("quote length is outside the supported range")
+    if quote.endswith(INCOMPLETE_QUOTE_ENDINGS):
+        issues.append("quote ends as an incomplete fragment")
+    if not quote.endswith(("。", "！", "!", ".")):
+        issues.append("quote is not a complete declarative sentence")
+    if re.search(r"(?:因为|所以|但是|然后|而且|如果|包括|比如)[。！!]$", quote):
+        issues.append("quote ends with a dangling connective")
+    if "？" in quote or "?" in quote:
+        issues.append("quote is a question rather than supporting evidence")
+    filler_count = len(re.findall(r"(?:呃|嗯|啊|这个|那个|就是说|我觉得)", quote))
+    if filler_count >= 2:
+        issues.append("quote contains too much conversational filler")
+    if re.search(
+        r"(?:不如果如果|如果如果|我我|你你|他他|的的|是是|有有|在在|"
+        r"很很|比较比较|这个这个|那个那个|一个一个|新新|产品产品|然后然后|对对|呃呃)",
+        quote,
+    ):
+        issues.append("quote contains obvious ASR repetition or stuttering")
+    if "|" in quote:
+        issues.append("quote contains an unsafe table delimiter")
+    if DISCOURSE_PREFIX_RE.match(quote):
+        issues.append("quote starts with conversational scaffolding")
+    if AMBIGUOUS_QUOTE_PREFIX_RE.match(quote):
+        issues.append("quote depends on missing prior context")
+    if LOW_VALUE_QUOTE_PREFIX_RE.match(quote):
+        issues.append("quote is an introduction or host prompt")
+    return issues
 
 
 def select_core_quote(block_text, section):
     block_text = (block_text or "").strip()
-    if len(block_text) < CORE_QUOTE_MAX_LENGTH and any(
-        marker in block_text for marker in TRANSCRIPT_PLACEHOLDER_MARKERS
-    ):
+    if not window_has_usable_speech(block_text):
         return ""
 
     candidates = [
         passage
         for passage in bounded_source_passages(block_text)
-        if len(passage) >= 8 and "|" not in passage
+        if not quote_quality_issues(passage, block_text)
     ]
     if not candidates:
         return ""
@@ -2060,15 +2201,210 @@ def select_core_quote(block_text, section):
         sentence_terms = relevance_terms(sentence)
         overlap = len(context_terms.intersection(sentence_terms))
         cue_score = sum(1 for cue in CORE_QUOTE_CUES if cue in sentence)
-        question_penalty = 8 if sentence.endswith(("？", "?")) else 0
+        paired_claim_bonus = 12 if (
+            ("不是" in sentence and "而是" in sentence)
+            or ("因为" in sentence and "所以" in sentence)
+            or ("虽然" in sentence and "但是" in sentence)
+        ) else 0
+        specificity = min(
+            6,
+            len(re.findall(r"[A-Za-z][A-Za-z0-9._+-]*|\d+(?:\.\d+)?%?", sentence)),
+        )
+        target_length_bonus = (
+            10 if 24 <= len(sentence) <= 110 else -abs(len(sentence) - 67) * 0.12
+        )
         return (
             overlap * 8
             + cue_score * 6
-            - question_penalty
-            - len(sentence) * 0.8
+            + paired_claim_bonus
+            + specificity * 2
+            + target_length_bonus
         )
 
-    return max(candidates, key=score)
+    relevant_candidates = [
+        candidate
+        for candidate in candidates
+        if context_terms.intersection(relevance_terms(candidate))
+    ]
+    if not relevant_candidates:
+        return ""
+    best = max(relevant_candidates, key=score)
+    return best if score(best) >= 8 else ""
+
+
+def quote_is_exceptional(quote, section):
+    if not quote:
+        return False
+    context_terms = relevance_terms(f"{section_title(section)} {section_first_claim(section)}")
+    overlap = len(context_terms.intersection(relevance_terms(quote)))
+    paired_claim = (
+        ("不是" in quote and "而是" in quote)
+        or ("虽然" in quote and "但是" in quote)
+        or ("有限" in quote and "无限" in quote)
+        or bool(re.search(r"finite.+infinite", quote, flags=re.IGNORECASE))
+    )
+    distinctive_cue = any(
+        cue in quote
+        for cue in ("最重要", "关键", "本质", "意味着", "赢家通吃", "必须", "只有")
+    )
+    if any(marker in section_title(section) for marker in ("开场", "介绍", "履历")):
+        return False
+    return len(quote) <= 100 and (
+        paired_claim
+        or (overlap >= 4 and distinctive_cue)
+    )
+
+
+def grounding_anchor_issues(anchor, block_text):
+    anchor = (anchor or "").strip()
+    issues = []
+    if anchor not in (block_text or ""):
+        issues.append("grounding anchor is not an exact span from its transcript window")
+    if len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", anchor)) < 2:
+        issues.append("grounding anchor is too short")
+    if len(anchor) > 220:
+        issues.append("grounding anchor is too long")
+    if "|" in anchor or "-->" in anchor:
+        issues.append("grounding anchor contains unsafe Markdown")
+    return issues
+
+
+def support_grounding_issues(detail, anchor):
+    detail_terms = relevance_terms(detail)
+    anchor_terms = relevance_terms(anchor)
+    overlap = detail_terms.intersection(anchor_terms)
+    if len(overlap) < 2:
+        return ["support does not share enough concrete content with its source anchor"]
+    return []
+
+
+def select_grounding_anchor(block_text, context):
+    candidates = []
+    for sentence in source_sentences(block_text):
+        sentence = sentence.strip()
+        if 2 <= len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", sentence)) and len(sentence) <= 220:
+            candidates.append(sentence)
+    if not candidates:
+        return ""
+    context_terms = relevance_terms(context)
+
+    def score(candidate):
+        overlap = len(context_terms.intersection(relevance_terms(candidate)))
+        specificity = min(
+            8,
+            len(re.findall(r"[A-Za-z][A-Za-z0-9._+-]*|\d+(?:\.\d+)?%?", candidate)),
+        )
+        return overlap * 6 + specificity * 2 - abs(len(candidate) - 80) * 0.03
+
+    best = max(candidates, key=score)
+    return best if len(context_terms.intersection(relevance_terms(best))) >= 2 else ""
+
+
+def select_key_evidence(section, core_claim):
+    candidates = []
+    for index, sentence in enumerate(section_body_sentences(section)):
+        sentence = sentence.strip()
+        if not sentence or sentence == core_claim or len(sentence) < 12:
+            continue
+        if sentence.endswith(("…", "...")) or any(
+            marker in sentence for marker in GENERIC_EVIDENCE_MARKERS
+        ):
+            continue
+        candidates.append((index, sentence))
+    if not candidates:
+        return ""
+
+    title_terms = relevance_terms(f"{section_title(section)} {core_claim}")
+
+    def score(item):
+        index, sentence = item
+        overlap = len(title_terms.intersection(relevance_terms(sentence)))
+        evidence_cues = sum(
+            marker in sentence
+            for marker in (
+                "因为", "因此", "所以", "意味着", "例如", "比如", "数据", "案例",
+                "机制", "如果", "只有", "相比", "从而", "但", "却", "而", "仍",
+            )
+        )
+        specificity = min(
+            8,
+            len(re.findall(r"[A-Za-z][A-Za-z0-9._+-]*|\d+(?:\.\d+)?%?", sentence)),
+        )
+        length_bonus = (
+            8 if 24 <= len(sentence) <= 140 else -abs(len(sentence) - 82) * 0.08
+        )
+        return overlap * 4 + evidence_cues * 5 + specificity * 2 + length_bonus - index * 0.2
+
+    return max(candidates, key=score)[1].replace("|", "｜")
+
+
+def normalize_structured_support(support, block_text, section=""):
+    value = (support or "").strip().replace("|", "｜")
+    quote_match = re.fullmatch(r"原话[：:]\s*[“\"](.+?)[”\"]", value)
+    if quote_match:
+        quote = quote_match.group(1).strip()
+        if not quote_quality_issues(quote, block_text) and quote_is_exceptional(quote, section):
+            return f"原话：“{quote}”"
+        return ""
+    grounded_match = GROUNDED_SUPPORT_RE.fullmatch(value)
+    if grounded_match:
+        label, detail, anchor = (part.strip() for part in grounded_match.groups())
+        minimum_detail_length = 10 if label == "论据" else 4
+        if (
+            len(detail) >= minimum_detail_length
+            and not detail.endswith(("…", "..."))
+            and not any(marker in detail for marker in GENERIC_EVIDENCE_MARKERS)
+            and not grounding_anchor_issues(anchor, block_text)
+            and not support_grounding_issues(detail, anchor)
+        ):
+            return f'{label}：{detail} <!--依据：“{anchor}”-->'
+        return ""
+    if value == NO_EVIDENCE_TEXT and not window_has_usable_speech(block_text):
+        return value
+    return ""
+
+
+def validate_section_row_metadata(block, section):
+    row = timeline_row_metadata(section)
+    claim = row["core_claim"]
+    support = row["support"]
+    issues = []
+    core_matches = TIMELINE_CORE_LINE_RE.findall(section or "")
+    support_matches = TIMELINE_SUPPORT_LINE_RE.findall(section or "")
+    if len(core_matches) != 1 or len(support_matches) != 1:
+        issues.append("section must contain exactly one of each row-metadata line")
+    nonempty_lines = [line for line in (section or "").splitlines() if line.strip()]
+    if (
+        len(nonempty_lines) < 2
+        or not TIMELINE_CORE_LINE_RE.fullmatch(nonempty_lines[-2])
+        or not TIMELINE_SUPPORT_LINE_RE.fullmatch(nonempty_lines[-1])
+    ):
+        issues.append("row metadata must be the final two lines in the required order")
+    if not claim:
+        issues.append("missing `核心观点` metadata")
+    else:
+        if len(claim) > 50:
+            issues.append("core claim exceeds 50 characters")
+        if claim.endswith(("…", "...")):
+            issues.append("core claim is mechanically truncated")
+        if "|" in claim:
+            issues.append("core claim contains a table delimiter")
+        if claim.strip("。！？!? ") == section_title(section).strip("。！？!? "):
+            issues.append("core claim merely repeats the section title")
+        if any(marker in claim for marker in ("本节介绍", "本窗口介绍", "核心观点", "内容概括")):
+            issues.append("core claim is generic rather than substantive")
+    if not support:
+        issues.append("missing `关键论据 / 金句` metadata")
+    else:
+        if "|" in support:
+            issues.append("support metadata contains a table delimiter")
+        if not normalize_structured_support(support, block.get("text", ""), section):
+            issues.append("support metadata is weak, malformed, or ungrounded")
+    return issues
+
+
+def escape_table_cell(value):
+    return re.sub(r"\s+", " ", value or "").strip().replace("|", "｜")
 
 
 def fallback_core_table(blocks, sections_by_window):
@@ -2081,13 +2417,141 @@ def fallback_core_table(blocks, sections_by_window):
     for block in blocks:
         window = block["window"]
         section = sections_by_window.get(window, "")
-        quote = select_core_quote(block.get("text", ""), section)
-        evidence = f"“{quote}”" if quote else "无可用原话（该窗口无有效转写）"
+        block_text = block.get("text", "")
+        row_metadata = timeline_row_metadata(section)
+        core_claim = row_metadata["core_claim"] or section_first_claim(section)
+        evidence = normalize_structured_support(row_metadata["support"], block_text, section)
+        if not evidence and window_has_usable_speech(block_text):
+            quote = select_core_quote(block_text, section)
+            key_evidence = select_key_evidence(section, core_claim)
+            anchor = select_grounding_anchor(
+                block_text,
+                f"{section_title(section)} {core_claim} {key_evidence}",
+            )
+            if quote and quote_is_exceptional(quote, section):
+                evidence = f"原话：“{quote}”"
+            elif quote:
+                evidence = f'论据：{quote} <!--依据：“{quote}”-->'
+            elif key_evidence and anchor and not support_grounding_issues(key_evidence, anchor):
+                evidence = f'论据：{key_evidence} <!--依据：“{anchor}”-->'
+            elif anchor:
+                evidence = f'论据：{anchor} <!--依据：“{anchor}”-->'
+            else:
+                background_anchor = next(iter(source_sentences(block_text)), "").strip()
+                if len(background_anchor) > 220:
+                    background_anchor = block_text[:180].strip()
+                if background_anchor:
+                    evidence = (
+                        f'背景：{background_anchor} '
+                        f'<!--依据：“{background_anchor}”-->'
+                    )
+                else:
+                    evidence = NO_EVIDENCE_TEXT
+        elif not evidence:
+            evidence = NO_EVIDENCE_TEXT
         rows.append(
-            f"| {window} | {section_title(section)} | {section_first_claim(section)} | {evidence} |"
+            f"| {window} | {escape_table_cell(section_title(section))} | "
+            f"{escape_table_cell(core_claim)} | {escape_table_cell(evidence)} |"
         )
     return "\n".join(rows)
 
+
+def parse_markdown_table_row(line):
+    stripped = (line or "").strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+    cells = [
+        cell.strip().replace("\\|", "|")
+        for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
+    ]
+    return cells if len(cells) == 4 else None
+
+
+def core_table_rows(markdown):
+    heading = re.search(r"^##\s+核心观点速览\b.*$", markdown or "", flags=re.MULTILINE)
+    if not heading:
+        return [], ["missing core table heading"]
+    rows = []
+    errors = []
+    table_started = False
+    for line in (markdown or "")[heading.end():].splitlines():
+        if not line.strip():
+            if table_started:
+                break
+            continue
+        if not line.lstrip().startswith("|"):
+            if table_started:
+                break
+            continue
+        table_started = True
+        cells = parse_markdown_table_row(line)
+        if cells is None:
+            errors.append(f"malformed table row: {line[:80]}")
+            continue
+        if cells == ["时间", "章节", "核心观点", "关键论据 / 金句"]:
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        rows.append(cells)
+    if not table_started:
+        errors.append("missing Markdown table")
+    return rows, errors
+
+
+def validate_core_table(blocks, markdown):
+    rows, errors = core_table_rows(markdown)
+    expected = [block["window"] for block in blocks]
+    found = [row[0] for row in rows]
+    if found != expected:
+        errors.append(
+            f"table windows must match transcript order: expected {expected}, found {found}"
+        )
+
+    block_by_window = {block["window"]: block for block in blocks}
+    seen = set()
+    for row in rows:
+        window, chapter, claim, support = row
+        if window in seen:
+            errors.append(f"duplicate table window: {window}")
+        seen.add(window)
+        if window not in block_by_window:
+            errors.append(f"unknown table window: {window}")
+            continue
+        if not chapter or not claim:
+            errors.append(f"empty chapter or core claim: {window}")
+        if claim.endswith(("…", "...")):
+            errors.append(f"mechanically truncated core claim: {window}")
+
+        block_text = block_by_window[window].get("text", "")
+        quote_match = re.fullmatch(r"(?:原话[：:]\s*)?[“\"](.+?)[”\"]", support)
+        if quote_match:
+            quote = quote_match.group(1).strip()
+            for issue in quote_quality_issues(quote, block_text):
+                errors.append(f"{window}: {issue}")
+            quote_section = f"## {window} {chapter}\n\n{claim}"
+            if not quote_is_exceptional(quote, quote_section):
+                errors.append(f"{window}: quote is complete but not distinctive enough for a gold quote")
+            continue
+        grounded_match = GROUNDED_SUPPORT_RE.fullmatch(support)
+        if grounded_match:
+            label, detail, anchor = (part.strip() for part in grounded_match.groups())
+            minimum_detail_length = 10 if label == "论据" else 4
+            if len(detail) < minimum_detail_length or any(
+                marker in detail for marker in GENERIC_EVIDENCE_MARKERS
+            ):
+                errors.append(f"weak or placeholder {label}: {window}")
+            for issue in grounding_anchor_issues(anchor, block_text):
+                errors.append(f"{window}: {issue}")
+            for issue in support_grounding_issues(detail, anchor):
+                errors.append(f"{window}: {issue}")
+            continue
+        if support == NO_EVIDENCE_TEXT:
+            if window_has_usable_speech(block_text):
+                errors.append(f"voiced window incorrectly marked as no evidence: {window}")
+            continue
+        errors.append(f"unsupported evidence cell format: {window}")
+
+    return {"valid": not errors, "errors": errors, "rows": rows}
 
 # ============================================================
 # Report prompts
@@ -2214,10 +2678,10 @@ def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False, 
     )
     repair_note = "这是缺失窗口修复任务，只输出下面列出的窗口章节。" if repair else ""
     proofread_instruction = (
-        "8. 先在每个窗口内部完成校对：修正标点、断句、明显错别字和专有名词；"
+        "12. 先在每个窗口内部完成校对：修正标点、断句、明显错别字和专有名词；"
         "再基于校对后的含义写摘要，但不要在输出中展示完整校对稿。"
         if inline_proofread
-        else "8. 直接基于输入文本生成摘要，不要输出完整 transcript。"
+        else "12. 直接基于输入文本生成摘要，不要输出完整 transcript。"
     )
 
     return f"""请基于以下带时间窗口的 ASR 转写文本，生成逐窗口播客深度解读章节。
@@ -2231,13 +2695,19 @@ def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False, 
 {required_windows}
 
 硬性要求：
-1. 只输出时间章节正文，不要输出 H1 标题、元信息 blockquote、转写说明或核心观点速览表。
+1. 只输出时间章节正文；不要输出 H1、节目元信息、转写说明或核心观点速览表。
 2. 必须严格生成 {len(blocks)} 个二级章节。
 3. 每个章节标题必须使用 `## HH:MM-HH:MM 主题`，且 `HH:MM-HH:MM` 必须与“必须输出的窗口”完全一致。
 4. 不得合并相邻窗口；不得跳过窗口；不得新增未列出的时间窗口。
 5. 如果某个窗口内容很少、噪声多或识别失败，也必须生成对应章节，并说明该窗口限制。
 6. 每节概括这一窗口讲了什么、为什么重要、使用了什么例子或论据。{detail_instruction}
-7. 只在转写文本支持时使用短引用；不能确定原话时改为转述。
+7. 提炼“硬核内容”，不要复述章节标题；优先保留机制、因果、数据、案例、对比和边界条件，不要为了凑金句选寒暄、身份介绍、主持人提问、口头填充或残句。
+8. 每节正文末尾必须追加且只追加下面两行，键名和顺序不得改变；合并器会将它们转成最终表格并从章节正文移除：
+   `> **核心观点**：一句不超过 50 字、可独立成立的完整结论`
+   `> **关键论据 / 金句**：论据：具体支撑 <!--依据：“同窗逐字片段”-->` 或 `原话：“完整原句”` 或 `背景：必要背景 <!--依据：“同窗逐字片段”-->` 或 `无可用证据（该窗口无有效转写）`
+9. “核心观点”不得照抄标题，不得使用省略号或机械截断，不得写“本节介绍了”等空话。
+10. 默认选择“论据”：必须给出本窗口里的具体机制、数据、案例、因果或边界条件，并在同一行末尾附 `<!--依据：“同窗逐字片段”-->`；依据必须逐字存在于该窗口且具体支撑转述，合并器会核验并在渲染时隐藏。`背景` 也必须附同样的同窗依据。只有原话逐字存在于本窗口、15-140 字、语义完整、脱离上下文仍可理解且比转述更有辨识度时，才选择“原话”。
+11. “原话”不得跨窗口拼接，不得以逗号或冒号结尾，不得使用无先行词的“这件事/这种可能性/它”，不得选择问题、寒暄、身份介绍、口头脚手架或统一占位；有效语音但只有过渡/背景时用“背景”，只有确实无有效语音时才能用“无可用证据”。两行内容都不得包含 `|`。
 {proofread_instruction}
 
 转写文本：
@@ -2248,27 +2718,6 @@ def build_timeline_batch_prompt(blocks, metadata, detailed=False, repair=False, 
 def build_timeline_prompt(transcript, metadata, detailed=False):
     blocks = parse_transcript_blocks(transcript)
     return build_timeline_batch_prompt(blocks, metadata, detailed=detailed)
-
-
-def build_final_table_prompt(body, metadata):
-    return f"""请基于以下已经生成的逐窗口播客解读正文，输出最终的 `## 核心观点速览` 表格。
-
-节目元信息：
-{metadata_for_prompt(metadata)}
-
-硬性要求：
-1. 只输出 `## 核心观点速览` 和紧随其后的 Markdown 表格，不要输出其他正文。
-2. 表头必须完全是：
-| 时间 | 章节 | 核心观点 | 关键论据 / 金句 |
-|------|------|----------|------------------|
-3. 每个 `## HH:MM-HH:MM 主题` 章节对应一行。
-4. 时间列必须使用完整窗口，例如 `00:00-00:03`。
-5. 核心观点用一句话压缩；关键论据 / 金句只使用正文或转写中支持的信息。
-
-逐窗口正文：
-{body}
-"""
-
 
 def build_brief_prompt(transcript, metadata, detailed=False):
     detail_instruction = ""
@@ -2615,12 +3064,17 @@ def generate_timeline_sections(
         sections_by_window.update(sections)
 
     validation = validate_section_map(blocks, sections_by_window)
-    if validation["missing"]:
-        print(f"发现缺失窗口 {len(validation['missing'])} 个，开始只重跑缺失窗口。")
+    repair_set = set(validation["missing"]) | set(validation["invalid_row_metadata"])
+    repair_windows = [block["window"] for block in blocks if block["window"] in repair_set]
+    if repair_windows:
+        print(
+            f"发现缺失或证据元数据不合格的窗口 {len(repair_windows)} 个，"
+            "开始只重跑这些窗口。"
+        )
         blocks_by_window = {block["window"]: block for block in blocks}
         repaired = repair_missing_sections(
             llm_provider,
-            validation["missing"],
+            repair_windows,
             blocks_by_window,
             metadata,
             detailed=detailed,
@@ -2629,55 +3083,58 @@ def generate_timeline_sections(
         sections_by_window.update(repaired)
 
     final_validation = validate_section_map(blocks, sections_by_window)
-    if final_validation["missing"]:
-        raise RuntimeError(
-            "报告章节校验失败，仍缺失窗口: "
-            + ", ".join(final_validation["missing"])
-        )
+    if final_validation["missing"] or final_validation["invalid_row_metadata"]:
+        details = []
+        if final_validation["missing"]:
+            details.append("缺失窗口: " + ", ".join(final_validation["missing"]))
+        if final_validation["invalid_row_metadata"]:
+            details.append(
+                "证据元数据不合格: "
+                + "; ".join(
+                    f"{window} ({', '.join(issues)})"
+                    for window, issues in final_validation["invalid_row_metadata"].items()
+                )
+            )
+        raise RuntimeError("报告章节校验失败，" + "；".join(details))
 
     ordered_sections = [sections_by_window[block["window"]].strip() for block in blocks]
     return "\n\n".join(ordered_sections), sections_by_window
 
 
 def generate_core_table(llm_provider, body, blocks, sections_by_window, metadata):
-    prompt = build_final_table_prompt(body, metadata)
-    messages = [
-        {"role": "system", "content": llm_system_message("timeline")},
-        {"role": "user", "content": prompt},
-    ]
-    table = complete_with_retry(
-        llm_provider,
-        messages,
-        max_tokens=LLM_MAX_TOKENS_FINAL_TABLE,
-        label="生成核心观点速览表",
-    ).strip()
-
-    if (
-        re.search(r"^##\s+核心观点速览\b", table, flags=re.MULTILINE) is None
-        or "| 时间 | 章节 | 核心观点 | 关键论据 / 金句 |" not in table
-    ):
-        print("警告: LLM 未返回合格的核心观点表，改用本地兜底表格。")
-        return fallback_core_table(blocks, sections_by_window)
+    # Each batch already saw the exact transcript window and emitted row metadata.
+    # Render locally so long reports do not need a lossy full-report LLM call.
+    _ = (llm_provider, body, metadata)
+    table = fallback_core_table(blocks, sections_by_window)
+    validation = validate_core_table(blocks, table)
+    if not validation["valid"]:
+        raise RuntimeError("核心观点速览表生成失败: " + "；".join(validation["errors"]))
     return table
 
 
 def build_timeline_report_from_sections(llm_provider, blocks, sections_by_window, metadata):
     section_validation = validate_section_map(blocks, sections_by_window)
-    if section_validation["missing"]:
+    if section_validation["missing"] or section_validation["invalid_row_metadata"]:
         raise RuntimeError(
-            "报告章节校验失败，仍缺失窗口: "
-            + ", ".join(section_validation["missing"])
+            "报告章节或证据元数据校验失败: "
+            + json.dumps(section_validation, ensure_ascii=False)
         )
 
     body = "\n\n".join(
-        sections_by_window[block["window"]].strip()
+        strip_timeline_row_metadata(sections_by_window[block["window"]])
         for block in blocks
     )
     table = generate_core_table(llm_provider, body, blocks, sections_by_window, metadata)
     report = "\n".join([build_report_header(metadata).rstrip(), body.rstrip(), "", table.rstrip(), ""])
 
     validation = validate_timeline_report(blocks, report)
-    if validation["missing"] or validation["extra"] or validation["duplicates"] or not validation["has_core_table"]:
+    if (
+        validation["missing"]
+        or validation["extra"]
+        or validation["duplicates"]
+        or not validation["has_core_table"]
+        or not validation["core_table_valid"]
+    ):
         details = []
         if validation["missing"]:
             details.append("缺失窗口: " + ", ".join(validation["missing"]))
@@ -2687,6 +3144,8 @@ def build_timeline_report_from_sections(llm_provider, blocks, sections_by_window
             details.append("重复窗口: " + ", ".join(validation["duplicates"]))
         if not validation["has_core_table"]:
             details.append("缺少核心观点速览表")
+        elif not validation["core_table_valid"]:
+            details.append("核心观点速览表不合格: " + ", ".join(validation["core_table"]["errors"]))
         raise RuntimeError("报告校验失败: " + "；".join(details))
 
     print(
@@ -2808,22 +3267,28 @@ def generate_timeline_outputs(
             print(f"  警告: 流水线批次 {batch_index} 输出额外章节，已忽略: {', '.join(extras)}")
 
         validation = validate_section_map(calibrated_batch, sections)
-        if validation["missing"]:
+        repair_set = set(validation["missing"]) | set(validation["invalid_row_metadata"])
+        repair_windows = [
+            block["window"]
+            for block in calibrated_batch
+            if block["window"] in repair_set
+        ]
+        if repair_windows:
             blocks_by_window = {block["window"]: block for block in calibrated_batch}
             sections.update(
                 repair_missing_sections(
                     llm_provider,
-                    validation["missing"],
+                    repair_windows,
                     blocks_by_window,
                     report_metadata,
                     detailed=detailed,
                 )
             )
         final_validation = validate_section_map(calibrated_batch, sections)
-        if final_validation["missing"]:
+        if final_validation["missing"] or final_validation["invalid_row_metadata"]:
             raise RuntimeError(
-                "报告章节校验失败，仍缺失窗口: "
-                + ", ".join(final_validation["missing"])
+                "报告章节校验失败: "
+                + json.dumps(final_validation, ensure_ascii=False)
             )
         return calibrated_batch, sections
 
@@ -2930,7 +3395,8 @@ def export_ide_prompts(
             "- Paste the prompt below into the current IDE model.\n"
             "- First proofread each ASR window internally, then summarize from the proofread meaning.\n"
             "- Save only the model's Markdown section output into the required output file.\n"
-            "- Do not add H1 title, metadata, transcription note, or core table.\n\n"
+            "- Preserve the required `核心观点` and `关键论据 / 金句` blockquote lines in every section.\n"
+            "- Do not add H1 title, program metadata, transcription note, or core table.\n\n"
             "---\n\n"
             f"{prompt_text}"
         )
@@ -2963,8 +3429,9 @@ python scripts/mimo_podcast_tool.py --transcript-input "{merge_transcript}" --ma
 - Each prompt lists exact required windows.
 - Each prompt must proofread ASR text inside each window before producing the section summary.
 - Each output file must contain only `## HH:MM-HH:MM 主题` sections.
+- Every section must end with the exact `核心观点` and `关键论据 / 金句` blockquote keys required by its prompt.
 - Do not merge, skip, or invent windows.
-- The script will ignore extra windows, reject missing windows, add the report header, add a fallback core table, and validate before writing.
+- The script removes those row-metadata lines from the body, renders the core table locally, rejects missing or ungrounded rows, and validates before writing.
 """
     (root / "README.md").write_text(readme, encoding="utf-8")
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3005,19 +3472,39 @@ def generate_manual_report(transcript, metadata, sections_dir):
         print("警告: 手动章节输出包含 transcript 不存在的窗口，已忽略: " + ", ".join(extras))
 
     validation = validate_section_map(blocks, sections_by_window)
-    if validation["missing"]:
+    if validation["missing"] or validation["invalid_row_metadata"]:
+        details = []
+        if validation["missing"]:
+            details.append("缺失窗口: " + ", ".join(validation["missing"]))
+        if validation["invalid_row_metadata"]:
+            details.append(
+                "证据元数据不合格: "
+                + "; ".join(
+                    f"{window} ({', '.join(issues)})"
+                    for window, issues in validation["invalid_row_metadata"].items()
+                )
+            )
         raise RuntimeError(
-            "手动章节输出缺失窗口: "
-            + ", ".join(validation["missing"])
-            + f"。请补齐后重新运行。已读取 {len(files)} 个文件。"
+            "手动章节输出校验失败: "
+            + "；".join(details)
+            + f"。请修复后重新运行。已读取 {len(files)} 个文件。"
         )
 
-    body = "\n\n".join(sections_by_window[block["window"]].strip() for block in blocks)
+    body = "\n\n".join(
+        strip_timeline_row_metadata(sections_by_window[block["window"]])
+        for block in blocks
+    )
     table = fallback_core_table(blocks, sections_by_window)
     report = "\n".join([build_report_header(metadata).rstrip(), body.rstrip(), "", table.rstrip(), ""])
 
     final_validation = validate_timeline_report(blocks, report)
-    if final_validation["missing"] or final_validation["extra"] or final_validation["duplicates"] or not final_validation["has_core_table"]:
+    if (
+        final_validation["missing"]
+        or final_validation["extra"]
+        or final_validation["duplicates"]
+        or not final_validation["has_core_table"]
+        or not final_validation["core_table_valid"]
+    ):
         raise RuntimeError(f"手动报告校验失败: {final_validation}")
 
     print(
@@ -3443,6 +3930,7 @@ def load_validated_timeline_report(path, transcript):
         or validation["extra"]
         or validation["duplicates"]
         or not validation["has_core_table"]
+        or not validation["core_table_valid"]
     ):
         raise VisualStageError(f"visual workflow report is not validated: {validation}")
     return report

@@ -1,4 +1,4 @@
 interface:
   display_name: "Podcast & Video Timeline Brief"
-  short_description: "Evidence-verified timelines and offline visual briefs"
-  default_prompt: "Use $mimo-token-plan-asr-llm-pipeline to turn this podcast or video into a calibrated transcript, a verified window-by-window analysis with exact-source quotes, and an offline HTML visual brief."
+  short_description: "Evidence-first timelines and offline visual briefs"
+  default_prompt: "Use $mimo-token-plan-asr-llm-pipeline to turn this podcast or video into a calibrated transcript, a verified window-by-window analysis, and an offline HTML visual brief. Prioritize concrete same-window mechanisms, cases, data, causality, or boundaries; quote only complete, standalone, high-information wording verbatim, use background for valid speech without an argument, and reserve no-evidence for windows without valid transcript."

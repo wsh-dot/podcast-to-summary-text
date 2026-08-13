@@ -76,6 +76,28 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("无有效语音", text)
         self.assertIn("绝不把正文首句、截断首句或正文同义复写当标题", text)
 
+    def test_timeline_contract_requires_grounded_paraphrases_and_local_rendering(self):
+        text = skill_text()
+
+        self.assertIn('<!--依据：“同窗逐字片段”-->', text)
+        self.assertIn("转述与隐藏依据必须共享具体内容", text)
+        self.assertIn("不得再用全稿 LLM 二次改写表格", text)
+        self.assertIn("错窗、幻觉或不可验证的论据", text)
+
+    def test_skill_is_a_progressively_disclosed_process_router(self):
+        text = skill_text()
+
+        self.assertLessEqual(len(text.splitlines()), 180)
+        self.assertIn("## 状态机与恢复动作", text)
+        self.assertIn("命中场景后完整读取对应语言 reference", text)
+        for routed_area in (
+            "references/api-reference*.md",
+            "references/providers*.md",
+            "references/timeline-report-format*.md",
+            "references/visual-html-report*.md",
+        ):
+            self.assertIn(routed_area, text)
+
     def test_default_media_parse_requires_complete_three_artifact_bundle(self):
         text = skill_text()
 

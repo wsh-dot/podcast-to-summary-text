@@ -586,7 +586,11 @@ class APILLMVisualIntegrationTests(unittest.TestCase):
             sections.mkdir()
             (sections / "batch_001.md").write_text(
                 "## 00:00-00:30 Growth\n\nEvidence-backed growth section.\n\n"
-                "## 00:30-01:00 Retention\n\nEvidence-backed retention section.\n",
+                "> **核心观点**：Launch drove measurable revenue growth.\n"
+                "> **关键论据 / 金句**：论据：Revenue grew 20 percent after the launch. <!--依据：“Revenue grew 20 percent after the launch.”-->\n\n"
+                "## 00:30-01:00 Retention\n\nEvidence-backed retention section.\n\n"
+                "> **核心观点**：Clearer onboarding improved retention.\n"
+                "> **关键论据 / 金句**：论据：Retention improved because onboarding became clearer. <!--依据：“Retention improved because onboarding became clearer.”-->\n",
                 encoding="utf-8",
             )
             output_dir = root / "output"
@@ -604,7 +608,13 @@ class APILLMVisualIntegrationTests(unittest.TestCase):
             with patch.object(sys, "argv", argv), patch("builtins.print") as output:
                 tool.main()
 
-            self.assertTrue((output_dir / "Launch_review_逐窗口深度解读.md").is_file())
+            report_path = output_dir / "Launch_review_逐窗口深度解读.md"
+            self.assertTrue(report_path.is_file())
+            report = report_path.read_text(encoding="utf-8")
+            self.assertNotIn("> **核心观点**", report)
+            self.assertNotIn("> **关键论据 / 金句**", report)
+            self.assertIn('论据：Revenue grew 20 percent after the launch.', report)
+            self.assertIn('论据：Retention improved because onboarding became clearer.', report)
             prompt_root = output_dir / "Launch_review_visual_prompts"
             self.assertTrue((prompt_root / "workflow.json").is_file())
             self.assertTrue((prompt_root / "batch_prompts" / "001.md").is_file())
@@ -629,7 +639,11 @@ class APILLMVisualIntegrationTests(unittest.TestCase):
             sections.mkdir()
             (sections / "batch_001.md").write_text(
                 "## 00:00-00:30 Growth\n\nEvidence-backed growth section.\n\n"
-                "## 00:30-01:00 Retention\n\nEvidence-backed retention section.\n",
+                "> **核心观点**：Launch drove measurable revenue growth.\n"
+                "> **关键论据 / 金句**：论据：Revenue grew 20 percent after the launch. <!--依据：“Revenue grew 20 percent after the launch.”-->\n\n"
+                "## 00:30-01:00 Retention\n\nEvidence-backed retention section.\n\n"
+                "> **核心观点**：Clearer onboarding improved retention.\n"
+                "> **关键论据 / 金句**：论据：Retention improved because onboarding became clearer. <!--依据：“Retention improved because onboarding became clearer.”-->\n",
                 encoding="utf-8",
             )
             output_dir = root / "output"

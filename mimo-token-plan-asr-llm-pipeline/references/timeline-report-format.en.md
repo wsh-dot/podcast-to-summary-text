@@ -10,7 +10,8 @@ Generate a Markdown report that can be read as a detailed podcast note:
 
 - timecode sections that explain what was discussed at each point
 - concise but substantive paragraphs under each timecode
-- direct quotes only when supported by transcript text
+- an Evidence / Quote field that prioritizes concrete mechanisms, cases, data, causal chains, or boundary conditions instead of forcing a quote for every window
+- a quote only when the same window contains a verbatim, complete, standalone, high-information statement
 - a final overview table for scanning
 
 The ASR transcript is chunk-window based, not sentence-timestamp based. Treat every timestamp as an approximate window anchor. By default, reports should use the LLM-proofread `{base_name}_校对.txt`, not the dirty raw ASR transcript.
@@ -44,22 +45,31 @@ The script should not ask one LLM call to produce the full body for long podcast
 
 [2-4 short paragraphs explaining the opening.]
 
-> "[short direct quote, only if present in transcript]"
+> **核心观点**：[one substantive conclusion; do not repeat the heading]
+> **关键论据 / 金句**：论据：[a concrete mechanism, case, datum, causal chain, or boundary condition from this window] <!--依据：“verbatim same-window source span”-->
 
 ## 00:03-00:06 [topic]
 
 [2-5 paragraphs. Explain the argument, examples, conclusions, and transitions.]
 
+> **核心观点**：[one substantive conclusion]
+> **关键论据 / 金句**：原话：“[verbatim wording from this window that is complete, standalone, and high-information]”
+
 ## 00:06-00:09 [topic]
 
 [One section must correspond to exactly one transcript window.]
+
+> **核心观点**：[one faithful summary]
+> **关键论据 / 金句**：背景：[factual context when valid speech contains no independent argument] <!--依据：“verbatim same-window source span”-->
 
 ## 核心观点速览
 
 | 时间 | 章节 | 核心观点 | 关键论据 / 金句 |
 |------|------|----------|------------------|
-| 00:03 | [section title] | [one concise claim] | [supporting detail or quote] |
+| 00:03-00:06 | [section title] | [one concise claim] | 论据：[specific support] |
 ```
+
+The two Chinese blockquote labels shown above are fixed parser keys and must not be translated. Every batch time section must end with exactly those two metadata lines. The second line must use exactly one form: `论据：... <!--依据：“verbatim same-window source span”-->`, `原话：“...”`, `背景：... <!--依据：“verbatim same-window source span”-->`, or `无可用证据（该窗口无有效转写）`. Evidence and context paraphrases require a verbatim same-window anchor that concretely supports them. The merger validates the anchor, preserves its HTML comment invisibly for publication checks, converts the rows into the overview table, and removes metadata from the body; it must not ask a model to rewrite the table or fill it with placeholders.
 
 ## Timecode Rules
 
@@ -67,11 +77,10 @@ The script should not ask one LLM call to produce the full body for long podcast
 - Every transcript window must produce exactly one `## HH:MM-HH:MM Topic` section.
 - The report body section count must equal the transcript window count.
 - Do not merge adjacent windows, even when a topic spans multiple windows.
-- Do not skip quiet, short, refused, or noisy windows; create the section and mark the limitation.
+- Do not skip quiet, short, refused, or noisy windows; create the section and state the limitation truthfully. If a short window still contains valid speech, use `背景：...` rather than marking it as no evidence.
 - Use `## 00:00-00:03 开场：Topic` for the opening window. Do not use an untimed `## 开场` heading.
 - Do not create minute or second precision that is not present in the transcript.
-- If one ASR window is missing, refused, or too short to summarize, mention it explicitly:
-  `> ⚠️ 本窗口（00:24-00:27）转写内容缺失或不可用，以下只依据相邻片段整理。`
+- If an ASR window contains no valid speech, state `> ⚠️ 本窗口（00:24-00:27）无有效转写，无法提炼本窗口观点。` in the body and use `> **关键论据 / 金句**：无可用证据（该窗口无有效转写）` as its second metadata line. Never borrow adjacent-window content to fill it.
 
 ## Batch Generation Rules
 
@@ -79,11 +88,11 @@ The script should not ask one LLM call to produce the full body for long podcast
 - API LLM mode runs at most two independent batches concurrently by default. Use `--llm-concurrency 1` for serial execution or strict provider rate limits.
 - In `separate` mode, run proofreading -> immediate summary for each batch instead of waiting for every window to be proofread first.
 - Each batch prompt must list the exact required windows and demand N windows -> N sections.
-- Batch outputs must contain only `## HH:MM-HH:MM Topic` sections, not the report H1, metadata block, transcription note, or final table.
+- Batch outputs must contain only `## HH:MM-HH:MM Topic` sections plus exactly two blockquote metadata lines at the end of each section, not the report H1, program metadata block, transcription note, or final table.
 - Parse returned sections by heading. Keep only windows that exist in the transcript and ignore any hallucinated extra window.
 - If validation finds missing windows, rerun only those missing windows as repair prompts.
-- Fail before writing the report if any transcript window is still missing, duplicated, or replaced by a non-transcript time window.
-- Generate `## 核心观点速览` after the body is complete, one row per time section.
+- Fail before writing the report if any transcript window is still missing, duplicated, replaced by a non-transcript time window, or lacks valid two-line metadata. Do not use a shared fallback placeholder.
+- After the body is complete, the merger must build `## 核心观点速览` directly from each section's two metadata lines, one row per section, then remove those lines from the body.
 
 ## Summary Mode Rules
 
@@ -92,14 +101,19 @@ All summary modes must produce the same final structure and pass the same transc
 - `ide-agent` is the default when no LLM API is selected. The agent reads the windowed transcript, proofreads each window first, generates one `batch_*.md` file per 6 windows under `<base_name>_agent_sections/`, then runs `--manual-sections-dir` to merge and validate.
 - `api-llm` is used only when the user explicitly selects a LLM API provider or provides `--llm-provider` / `--llm-api-key`. Default `separate` mode pipelines proofreading and summary per batch and saves the calibrated transcript; `inline` proofreads inside summary calls without saving it; `skip` uses the input directly.
 - `manual` is a fallback only when the user asks to export prompts or paste model outputs manually. Exported prompts must require the model to proofread ASR inside each window before writing summary sections. Use `--export-ide-prompts`, then `--manual-sections-dir`.
-- Each batch output must contain only timed `## HH:MM-HH:MM Topic` sections.
+- Each batch output must contain only timed `## HH:MM-HH:MM Topic` sections and the fixed two-line blockquote metadata for every section.
 - Do not merge windows, skip windows, or create timestamps outside the transcript in any mode.
 
 ## Content Rules
 
 - Produce one timecode section per transcript window. For 47 windows, produce 47 sections.
 - Each section should be self-contained: what was said, why it matters, what example or argument supports it.
-- Keep direct quotes short and faithful. If wording is uncertain, paraphrase instead of quoting.
+- The core idea must be a substantive conclusion, not a heading restatement or a claim forced merely to fill every window.
+- Prefer `论据：... <!--依据：“verbatim same-window source span”-->` and name a concrete same-window mechanism, case, datum, causal chain, or boundary condition. The source anchor must directly support the paraphrase; do not dress vague or ungrounded support up as evidence.
+- Use `原话：“...”` only when the wording appears verbatim in the same calibrated window and is complete, standalone, and high-information. Never splice windows, rewrite a paraphrase as a quote, leave a fragment, or mechanically truncate it with an ellipsis.
+- When valid speech contains no independent argument, use `背景：... <!--依据：“verbatim same-window source span”-->` for factual context. Do not present greetings, identity introductions, or host questions as evidence or quotes.
+- Use the exact text `无可用证据（该窗口无有效转写）` only when the window has no valid speech. Never substitute shared placeholders such as “supported by body,” “see above,” or “no usable quote.”
+- Never select greetings, identity introductions, host questions, verbal fillers, sentence fragments, or pronoun-led lines without a clear antecedent as `论据` or `原话`. If exact wording is uncertain, use a faithful `论据：...` or `背景：...` instead.
 - Correct obvious ASR spelling/name errors only when context makes the correction highly likely.
 - Do not invent guests, hosts, products, claims, quotes, or missing segment content.
 - If metadata is absent, omit that metadata line rather than writing "unknown".

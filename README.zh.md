@@ -25,7 +25,9 @@ mimo-token-plan-asr-llm-pipeline/
 - 每个 ASR 转写窗口对应一个报告章节
 - ASR 原始文本会先经 LLM 校对，再进入总结阶段
 - 每个时间段讲了什么的概括
-- 只在转写稿有依据时保留短引用
+- “关键论据 / 金句”优先提炼同窗的具体机制、案例、数据、因果链或边界条件，不强凑引用
+- 只有完整独立、高信息密度的同窗逐字原话才作为金句；有效语音无独立论证时标背景，只有无有效转写时才标无可用证据
+- 转述型论据在 Markdown 中保留不可见的同窗逐字依据；GitHub 只展示精炼论据，校验器仍可拒绝幻觉和跨窗口支撑
 - 转写说明
 - 方便快速浏览的“核心观点速览”表格
 - HTML 使用 VisualBriefManifest v2，包含一句话总览、核心要点、开发启发、批判性思考和延伸问题
@@ -59,6 +61,7 @@ mimo-token-plan-asr-llm-pipeline/
 
 - 原视频时长 3 小时 48 分钟，校对转写稿完整保留 77 个时间窗口
 - 逐窗口深度解读覆盖全部 77 个窗口，是可核查的 Markdown 事实主产物
+- 速览表包含 3 条高辨识度逐字原话、73 条带同窗隐藏依据的精炼论据和 1 个真实空窗口；无逗号残句或错窗证据
 - 完整读取校对稿和逐窗口深度解读后，再压缩为约 5–7 分钟可读的 HTML 全局解读
 - 页面包含 5 个主题、4 条核心洞见和 8 张 renderer-owned CSS/SVG 信息图
 - HTML 完全自包含，不依赖外部脚本或图片资源
@@ -292,6 +295,6 @@ python scripts/mimo_podcast_tool.py --help
 
 当前发布还通过了：
 
-- `python -m unittest discover -s tests -v`：115 个测试
-- skill-judge：`116/120（A）`
-- SkillOpt skillquality gate：`hard=1.0000`、`soft=1.0000`（17/17）
+- `python -m unittest discover -s tests -v`：124 个测试
+- [skill-judge：`117/120（A）`](docs/skill-evaluation.md)
+- SkillOpt held-out quality gate：`17/17`
